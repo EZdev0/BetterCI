@@ -1,0 +1,14 @@
+# Reference GBNF for vibeci.models.FixProposal (fixed key order).
+# Production path: llama-server converts schemas/fix.schema.json to a grammar per request
+# (response_format=json_schema). This file is for --grammar-file use / offline review.
+# A grammar guarantees SYNTAX only. Value ranges and semantics are enforced by
+# Pydantic (vibeci/models.py) and the patch gate (vibeci/gate.py).
+root    ::= "{" ws "\"verdict\"" ws ":" ws verdict "," ws "\"bug\"" ws ":" ws str "," ws "\"edge_case\"" ws ":" ws (edge | "null") "," ws "\"start_line\"" ws ":" ws int "," ws "\"end_line\"" ws ":" ws int "," ws "\"replacement\"" ws ":" ws (str | "null") "," ws "\"confidence\"" ws ":" ws conf ws "}"
+verdict ::= "\"fix\"" | "\"no_fix\"" | "\"needs_human\""
+conf    ::= "\"high\"" | "\"medium\"" | "\"low\""
+edge    ::= "{" ws "\"kind\"" ws ":" ws kind "," ws "\"scenario\"" ws ":" ws str ws "}"
+kind    ::= "\"none_value\"" | "\"syscall_failure\"" | "\"race_condition\"" | "\"resource_leak\"" | "\"bounds\"" | "\"encoding\"" | "\"injection\"" | "\"other\""
+str     ::= "\"" char* "\""
+char    ::= [^"\\\x7F\x00-\x1F] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F])
+int     ::= [1-9] [0-9]{0,5}
+ws      ::= [ \t\n]{0,2}

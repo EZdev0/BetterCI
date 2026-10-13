@@ -1,0 +1,145 @@
+name: VibeCI
+description: Deterministic-first CI triage with a local 7B model. One-click fixes as native GitHub suggestions. No API keys, no data leaves the runner.
+author: EZdev0
+branding:
+  icon: shield
+  color: purple
+
+inputs:
+  profile:
+    description: "fast = ruff/shellcheck/zizmor, balanced = + vulture/radon, deep = reserved for heavier scanners"
+    default: balanced
+  llm:
+    description: "Use the local model for fixes the scanners cannot produce (true|false)"
+    default: "true"
+  model:
+    description: "Model key from tools.lock.json"
+    default: qwen2.5-coder-7b
+  transport:
+    description: "anthropic = Anthropic SDK against llama-server /v1/messages, grammar = /v1/chat/completions with json_schema"
+    default: anthropic
+  max-llm-findings:
+    description: "Maximum number of findings sent to the model"
+    default: "5"
+  llm-budget-seconds:
+    description: "Wall-clock budget for all model calls"
+    default: "150"
+  threads:
+    description: "CPU threads for llama-server (0 = all cores)"
+    default: "0"
+  spec-type:
+    description: "llama.cpp speculative decoding (none, ngram-mod, ngram-simple, ...). Benchmark before enabling."
+    default: none
+  verify:
+    description: "full = re-hash cached model every run, size = trust marker written after first full verification"
+    default: full
+  fail-on:
+    description: "none | error (fail the job on unfixed error-level findings)"
+    default: none
+  post-review:
+    description: "Post suggestions as a PR review (same-repo PRs only)"
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve cache key
+      id: lock
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        MODEL: ${{ inputs.model }}
+      run: |
+        set -euo pipefail
+        key="$(cat "$ACTION_PATH/tools.lock.json" "$ACTION_PATH/requirements.lock" | sha256sum | cut -c1-16)"
+        echo "key=vibeci-v1-${RUNNER_OS}-${RUNNER_ARCH}-${MODEL}-${key}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore VibeCI cache (venv, llama.cpp, model)
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.vibeci
+        key: ${{ steps.lock.outputs.key }}
+
+    - name: Install pinned tools (hash-verified)
+      id: install
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        LLM: ${{ inputs.llm }}
+        MODEL: ${{ inputs.model }}
+        VIBECI_VERIFY: ${{ inputs.verify }}
+      run: |
+        set -euo pipefail
+        export VIBECI_HOME="$HOME/.vibeci" VIBECI_LOCK="$ACTION_PATH/tools.lock.json"
+        mkdir -p "$VIBECI_HOME"
+        t0=$(date +%s)
+        python3 -m venv "$VIBECI_HOME/venv"
+        "$VIBECI_HOME/venv/bin/pip" install --quiet --disable-pip-version-check --require-hashes --no-deps -r "$ACTION_PATH/requirements.lock"
+        echo "python tools: $(( $(date +%s) - t0 ))s"
+        if [ "$LLM" = "true" ]; then
+          t1=$(date +%s)
+          bash "$ACTION_PATH/scripts/install-llama.sh"
+          model_path="$(bash "$ACTION_PATH/scripts/fetch-model.sh" "$MODEL" | tail -n 1)"
+          echo "model_path=$model_path" >> "$GITHUB_OUTPUT"
+          echo "llama.cpp + model: $(( $(date +%s) - t1 ))s"
+        fi
+
+    - name: Start local model server
+      if: inputs.llm == 'true'
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        MODEL_PATH: ${{ steps.install.outputs.model_path }}
+        VIBECI_THREADS: ${{ inputs.threads }}
+        VIBECI_SPEC: ${{ inputs.spec-type }}
+      run: |
+        set -euo pipefail
+        export VIBECI_HOME="$HOME/.vibeci" VIBECI_LOCK="$ACTION_PATH/tools.lock.json"
+        build="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['llama_cpp']['build'])" "$VIBECI_LOCK")"
+        bash "$ACTION_PATH/scripts/start-server.sh" "$VIBECI_HOME/llama-$build" "$MODEL_PATH"
+
+    - name: Scan changed lines
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        PROFILE: ${{ inputs.profile }}
+        LLM: ${{ inputs.llm }}
+        TRANSPORT: ${{ inputs.transport }}
+        MAX_LLM: ${{ inputs.max-llm-findings }}
+        BUDGET: ${{ inputs.llm-budget-seconds }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        OUT: ${{ runner.temp }}/vibeci-out
+      run: |
+        set -euo pipefail
+        export PATH="$HOME/.vibeci/venv/bin:$PATH" PYTHONPATH="$ACTION_PATH"
+        args=(scan --profile "$PROFILE" --max-llm "$MAX_LLM" --llm-budget "$BUDGET" --transport "$TRANSPORT" --fail-on "$FAIL_ON" --out "$OUT")
+        if [ "$LLM" = "true" ]; then args+=(--llm-url "http://127.0.0.1:8080"); else args+=(--no-llm); fi
+        python -m vibeci "${args[@]}"
+
+    - name: Post one-click suggestions
+      if: inputs.post-review == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        OUT: ${{ runner.temp }}/vibeci-out
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        export PATH="$HOME/.vibeci/venv/bin:$PATH" PYTHONPATH="$ACTION_PATH"
+        python -m vibeci post --out "$OUT"
+
+    - name: Upload review artifact
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: vibeci-review
+        path: ${{ runner.temp }}/vibeci-out
+        if-no-files-found: ignore
+        retention-days: 7
+
+    - name: Stop model server
+      if: always() && inputs.llm == 'true'
+      shell: bash
+      run: |
+        pidfile="${RUNNER_TEMP:-/tmp}/server.pid"
+        [ -f "$pidfile" ] && kill "$(cat "$pidfile")" 2>/dev/null || true

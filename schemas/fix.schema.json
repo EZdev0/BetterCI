@@ -1,0 +1,105 @@
+{
+  "$defs": {
+    "EdgeCase": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "none_value",
+            "syscall_failure",
+            "race_condition",
+            "resource_leak",
+            "bounds",
+            "encoding",
+            "injection",
+            "other"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "scenario": {
+          "maxLength": 240,
+          "minLength": 3,
+          "title": "Scenario",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "scenario"
+      ],
+      "title": "EdgeCase",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "What the model is allowed to say. Nothing else can be produced.",
+  "properties": {
+    "verdict": {
+      "enum": [
+        "fix",
+        "no_fix",
+        "needs_human"
+      ],
+      "title": "Verdict",
+      "type": "string"
+    },
+    "bug": {
+      "maxLength": 240,
+      "minLength": 3,
+      "title": "Bug",
+      "type": "string"
+    },
+    "edge_case": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EdgeCase"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "start_line": {
+      "minimum": 1,
+      "title": "Start Line",
+      "type": "integer"
+    },
+    "end_line": {
+      "minimum": 1,
+      "title": "End Line",
+      "type": "integer"
+    },
+    "replacement": {
+      "anyOf": [
+        {
+          "maxLength": 4000,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Replacement"
+    },
+    "confidence": {
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ],
+      "title": "Confidence",
+      "type": "string"
+    }
+  },
+  "required": [
+    "verdict",
+    "bug",
+    "start_line",
+    "end_line",
+    "confidence"
+  ],
+  "type": "object"
+}

@@ -1,0 +1,54 @@
+name: benchmark
+
+# Measures what the 90 s / 30 s targets actually cost on a real GitHub-hosted runner.
+# Run it twice (cold, then cached) and read the job summary.
+on:
+  workflow_dispatch:
+    inputs:
+      threads:
+        description: "llama.cpp threads"
+        default: "4"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cache
+        with:
+          path: ~/.vibeci
+          key: vibeci-bench-${{ runner.os }}-${{ hashFiles('tools.lock.json') }}
+      - name: Install llama.cpp and fetch model (timed)
+        id: fetch
+        env:
+          CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.vibeci"
+          export VIBECI_HOME="$HOME/.vibeci" VIBECI_LOCK="$PWD/tools.lock.json"
+          t0=$(date +%s); bash scripts/install-llama.sh; t1=$(date +%s)
+          model="$(bash scripts/fetch-model.sh qwen2.5-coder-7b | tail -n 1)"; t2=$(date +%s)
+          {
+            echo "### Phase timings (cache hit: ${CACHE_HIT:-false})"
+            echo "- llama.cpp install: $((t1 - t0))s"
+            echo "- model fetch + SHA-256 verify: $((t2 - t1))s"
+            echo "- runner CPU: $(lscpu | awk -F: '/Model name/ {gsub(/^ +/,"",$2); print $2}'), $(nproc) vCPU, $(free -g | awk '/Mem:/ {print $2}') GB RAM"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
+      - name: llama-bench (prefill = pp, generation = tg)
+        env:
+          THREADS: ${{ inputs.threads }}
+          MODEL: ${{ steps.fetch.outputs.model }}
+        run: |
+          set -euo pipefail
+          d="$(ls -d "$HOME"/.vibeci/llama-*)"
+          export LD_LIBRARY_PATH="$d"
+          { echo '### llama-bench'; echo '```'; "$d/llama-bench" -m "$MODEL" -t "$THREADS" -p 512,1536 -n 128 -r 2; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

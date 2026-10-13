@@ -1,0 +1,8 @@
+anthropic
+pydantic
+PyYAML
+ruff
+vulture
+radon
+shellcheck-py
+zizmor

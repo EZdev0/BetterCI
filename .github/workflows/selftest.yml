@@ -1,0 +1,30 @@
+name: selftest
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install hash-locked tools
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet --require-hashes --no-deps -r requirements.lock
+          .venv/bin/pip install --quiet pytest==8.3.5
+      - name: Unit + end-to-end tests (mock llama-server)
+        run: PATH="$PWD/.venv/bin:$PATH" PYTHONPATH=. python -m pytest -q tests
+      - name: Shell scripts
+        run: |
+          PATH="$PWD/.venv/bin:$PATH" shellcheck scripts/*.sh
+      - name: Lint our own workflows with zizmor
+        run: PATH="$PWD/.venv/bin:$PATH" zizmor --offline --no-progress --min-severity medium .github action.yml

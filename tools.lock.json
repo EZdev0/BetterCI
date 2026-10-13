@@ -1,0 +1,16 @@
+{
+  "llama_cpp": {
+    "build": "b11429",
+    "asset": "llama-b11429-bin-ubuntu-x64.tar.gz",
+    "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11429/llama-b11429-bin-ubuntu-x64.tar.gz",
+    "sha256": "f6d25dde8f51133143d1453da4fd5f73b145127177612a283bf7995957af3392"
+  },
+  "models": {
+    "qwen2.5-coder-7b": {
+      "repo": "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF",
+      "revision": "edafdf364bf87b6bcaf18bf8f7ab1c0c15ae9142",
+      "file": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+      "sha256": "1664fccab734674a50763490a8c6931b70e3f2f8ec10031b54806d30e5f956b6"
+    }
+  }
+}
