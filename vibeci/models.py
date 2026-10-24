@@ -8,7 +8,7 @@ GBNF grammar. A grammar guarantees SYNTAX only; semantics are checked by
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -33,10 +33,10 @@ class Finding(BaseModel):
     severity: Severity = Severity.warning
     # A fix produced by the scanner itself (no LLM involved). Whole replacement
     # for lines [line..end_line], or None when the scanner has no fix.
-    tool_fix: Optional[str] = None
+    tool_fix: str | None = None
 
     @model_validator(mode="after")
-    def _order(self) -> "Finding":
+    def _order(self) -> Finding:
         if self.end_line < self.line:
             self.end_line = self.line
         return self
@@ -65,14 +65,14 @@ class FixProposal(BaseModel):
 
     verdict: Literal["fix", "no_fix", "needs_human"]
     bug: str = Field(min_length=3, max_length=240)
-    edge_case: Optional[EdgeCase] = None
+    edge_case: EdgeCase | None = None
     start_line: int = Field(ge=1)
     end_line: int = Field(ge=1)
-    replacement: Optional[str] = Field(default=None, max_length=4000)
+    replacement: str | None = Field(default=None, max_length=4000)
     confidence: Literal["high", "medium", "low"]
 
     @model_validator(mode="after")
-    def _consistent(self) -> "FixProposal":
+    def _consistent(self) -> FixProposal:
         if self.end_line < self.start_line:
             raise ValueError("end_line < start_line")
         if self.verdict == "fix" and self.replacement is None:

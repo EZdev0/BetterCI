@@ -10,7 +10,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from typing import Dict, List, Optional, Set
 
 from .models import Finding, Severity
 
@@ -21,7 +20,7 @@ def log(msg: str) -> None:
     print(f"[vibeci] {msg}", file=sys.stderr, flush=True)
 
 
-def _run(cmd: List[str], timeout: int = 120, cwd: Optional[str] = None) -> Optional[subprocess.CompletedProcess]:
+def _run(cmd: list[str], timeout: int = 120, cwd: str | None = None) -> subprocess.CompletedProcess | None:
     if not shutil.which(cmd[0]):
         log(f"tool not installed, skipping: {cmd[0]}")
         return None
@@ -32,7 +31,7 @@ def _run(cmd: List[str], timeout: int = 120, cwd: Optional[str] = None) -> Optio
         return None
 
 
-def _read(path: str) -> Optional[str]:
+def _read(path: str) -> str | None:
     try:
         if os.path.getsize(path) > MAX_FILE_BYTES:
             return None
@@ -42,7 +41,7 @@ def _read(path: str) -> Optional[str]:
         return None
 
 
-def _changed_region(old: str, new: str) -> List[tuple]:
+def _changed_region(old: str, new: str) -> list[tuple]:
     """Contiguous (start, end, replacement) hunks, 1-based inclusive on `old`."""
     a, b = old.splitlines(keepends=True), new.splitlines(keepends=True)
     hunks = []
@@ -60,7 +59,7 @@ def _changed_region(old: str, new: str) -> List[tuple]:
 
 
 # ---------------------------------------------------------------- ruff ----
-def _apply_ruff_edits(source: str, edits: List[dict]) -> str:
+def _apply_ruff_edits(source: str, edits: list[dict]) -> str:
     starts = [0]
     for ln in source.splitlines(keepends=True):
         starts.append(starts[-1] + len(ln))
@@ -77,7 +76,7 @@ def _apply_ruff_edits(source: str, edits: List[dict]) -> str:
     return out
 
 
-def run_ruff(files: List[str]) -> List[Finding]:
+def run_ruff(files: list[str]) -> list[Finding]:
     files = [f for f in files if f.endswith((".py", ".pyi"))]
     if not files:
         return []
@@ -89,8 +88,8 @@ def run_ruff(files: List[str]) -> List[Finding]:
     except json.JSONDecodeError:
         log("ruff: unparsable output")
         return []
-    out: List[Finding] = []
-    cache: Dict[str, Optional[str]] = {}
+    out: list[Finding] = []
+    cache: dict[str, str | None] = {}
     for item in raw:
         path = os.path.relpath(item["filename"])
         loc, end = item["location"], item["end_location"]
@@ -115,12 +114,12 @@ def run_ruff(files: List[str]) -> List[Finding]:
 _VULTURE = re.compile(r"^(?P<p>.+?):(?P<l>\d+): (?P<m>.+) \((?P<c>\d+)% confidence\)$")
 
 
-def run_vulture(files: List[str]) -> List[Finding]:
+def run_vulture(files: list[str]) -> list[Finding]:
     files = [f for f in files if f.endswith(".py")]
     if not files:
         return []
     proc = _run(["vulture", *files, "--min-confidence", "80"])
-    out: List[Finding] = []
+    out: list[Finding] = []
     for ln in (proc.stdout.splitlines() if proc else []):
         m = _VULTURE.match(ln.strip())
         if m:
@@ -130,7 +129,7 @@ def run_vulture(files: List[str]) -> List[Finding]:
 
 
 # --------------------------------------------------------------- radon ----
-def run_radon(files: List[str], min_rank: str = "C") -> List[Finding]:
+def run_radon(files: list[str], min_rank: str = "C") -> list[Finding]:
     files = [f for f in files if f.endswith(".py")]
     if not files:
         return []
@@ -141,7 +140,7 @@ def run_radon(files: List[str], min_rank: str = "C") -> List[Finding]:
         raw = json.loads(proc.stdout)
     except json.JSONDecodeError:
         return []
-    out: List[Finding] = []
+    out: list[Finding] = []
     for path, blocks in raw.items():
         if not isinstance(blocks, list):
             continue
@@ -157,7 +156,7 @@ def run_radon(files: List[str], min_rank: str = "C") -> List[Finding]:
 _SC_LEVEL = {"error": Severity.error, "warning": Severity.warning}
 
 
-def run_shellcheck(files: List[str]) -> List[Finding]:
+def run_shellcheck(files: list[str]) -> list[Finding]:
     files = [f for f in files if f.endswith((".sh", ".bash"))]
     if not files:
         return []
@@ -177,7 +176,7 @@ def run_shellcheck(files: List[str]) -> List[Finding]:
 _ZSEV = {"High": Severity.error, "Medium": Severity.warning}
 
 
-def run_zizmor(files: List[str]) -> List[Finding]:
+def run_zizmor(files: list[str]) -> list[Finding]:
     wf = [f for f in files if re.search(r"(^|/)\.github/(workflows|actions)/.+\.ya?ml$", f)]
     if not wf:
         return []
@@ -188,7 +187,7 @@ def run_zizmor(files: List[str]) -> List[Finding]:
         raw = json.loads(proc.stdout)
     except json.JSONDecodeError:
         return []
-    out: List[Finding] = []
+    out: list[Finding] = []
     for r in raw:
         if r.get("ignored"):
             continue
@@ -200,19 +199,27 @@ def run_zizmor(files: List[str]) -> List[Finding]:
             pt = loc["concrete"]["location"]
             if not key:
                 continue
-            out.append(Finding(tool="zizmor", rule=r["ident"], path=key, line=pt["start_point"]["row"] + 1,
+            out.append(Finding(tool="zizmor", rule=r["ident"], path=os.path.relpath(key), line=pt["start_point"]["row"] + 1,
                                end_line=pt["end_point"]["row"] + 1,
                                message=f"{r['desc']}: {loc['symbolic'].get('annotation', '')}".strip(": "), severity=sev))
     return out
 
 
-def zizmor_safe_fixes(files: List[str]) -> List[Finding]:
-    """Apply `zizmor --fix=safe` to a scratch copy and turn the delta into suggestions."""
+def zizmor_autofixes(files: list[str]) -> list[Finding]:
+    """Apply zizmor's auto-fixes to a scratch copy and turn the delta into suggestions.
+
+    zizmor 1.30.1 marks every fix it offers as `unsafe` (verified against its
+    json-v1 output), so `--fix=safe` applies nothing at all. We therefore run
+    `--fix=all` on a throwaway copy: the real workflow file is never changed
+    here, and every resulting hunk still has to pass the diff-visibility clamp
+    and the YAML patch gate before it can be posted as a suggestion.
+    """
     wf = [f for f in files if re.search(r"(^|/)\.github/(workflows|actions)/.+\.ya?ml$", f)]
-    out: List[Finding] = []
+    out: list[Finding] = []
     if not wf or not shutil.which("zizmor"):
         return out
     with tempfile.TemporaryDirectory() as td:
+        copies: list[str] = []
         for f in wf:
             src = _read(f)
             if src is None:
@@ -221,20 +228,24 @@ def zizmor_safe_fixes(files: List[str]) -> List[Finding]:
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             with open(dst, "w", encoding="utf-8") as fh:
                 fh.write(src)
-        _run(["zizmor", "--offline", "--no-progress", "--fix=safe", "--format", "plain", td], timeout=60)
+            copies.append(dst)
+        if not copies:
+            return out
+        _run(["zizmor", "--offline", "--no-progress", "--fix=all", "--format", "plain", *copies], timeout=60)
         for f in wf:
             old, dst = _read(f), os.path.join(td, f)
             new = _read(dst) if os.path.exists(dst) else None
             if old is None or new is None or old == new:
                 continue
             for s, e, rep in _changed_region(old, new):
-                out.append(Finding(tool="zizmor", rule="safe-autofix", path=f, line=s, end_line=e,
-                                   message="zizmor safe auto-fix", severity=Severity.warning, tool_fix=rep))
+                out.append(Finding(tool="zizmor", rule="zizmor-autofix", path=f, line=s, end_line=e,
+                                   message="zizmor auto-fix (scratch copy, review before applying)",
+                                   severity=Severity.warning, tool_fix=rep))
     return out
 
 
 # -------------------------------------------------------------- trivy -----
-def run_trivy_sarif(sarif_path: str) -> List[Finding]:
+def run_trivy_sarif(sarif_path: str) -> list[Finding]:
     """Parse an existing Trivy SARIF file (the scan itself runs in a separate,
     pinned step because of the vulnerability DB download)."""
     try:
@@ -242,7 +253,7 @@ def run_trivy_sarif(sarif_path: str) -> List[Finding]:
             doc = json.load(fh)
     except (OSError, json.JSONDecodeError):
         return []
-    out: List[Finding] = []
+    out: list[Finding] = []
     for run in doc.get("runs", []):
         for res in run.get("results", []):
             for loc in res.get("locations", []):
@@ -257,13 +268,13 @@ def run_trivy_sarif(sarif_path: str) -> List[Finding]:
     return out
 
 
-def collect(files: List[str], profile: str = "balanced") -> List[Finding]:
+def collect(files: list[str], profile: str = "balanced") -> list[Finding]:
     """Run all scanners for the profile on the given changed files."""
-    out: List[Finding] = []
+    out: list[Finding] = []
     out += run_ruff(files)
     out += run_shellcheck(files)
     out += run_zizmor(files)
-    out += zizmor_safe_fixes(files)
+    out += zizmor_autofixes(files)
     if profile in ("balanced", "deep"):
         out += run_vulture(files)
         out += run_radon(files)

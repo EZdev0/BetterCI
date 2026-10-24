@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # Keep the full-SHA action pins in action.yml and .github/workflows fresh.
+  # A cooldown avoids pulling a release on day one (supply-chain hygiene).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns:
+          - "*"

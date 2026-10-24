@@ -6,7 +6,6 @@ import json
 import os
 import sys
 import time
-from typing import Dict, List, Set
 
 from . import __version__, diffmap, tools
 from .llm import LLMClient
@@ -20,7 +19,7 @@ def _esc(s: str, prop: bool = False) -> str:
     return s.replace(":", "%3A").replace(",", "%2C") if prop else s
 
 
-def _in_diff(f: Finding, dm: Dict[str, Set[int]]) -> bool:
+def _in_diff(f: Finding, dm: dict[str, set[int]]) -> bool:
     vis = dm.get(f.path, set())
     return any(n in vis for n in range(f.line, f.end_line + 1))
 
@@ -76,7 +75,11 @@ def cmd_post(a: argparse.Namespace) -> int:
     if fork:
         log("fork PR: token is read-only, suggestions stay in the job summary/annotations")
         return 0
-    with open(os.path.join(a.out, "review.json"), encoding="utf-8") as fh:
+    review_path = os.path.join(a.out, "review.json")
+    if not os.path.isfile(review_path):
+        log("no review.json found; scan produced no output, nothing to post")
+        return 0
+    with open(review_path, encoding="utf-8") as fh:
         sugs = [Suggestion.model_validate(s) for s in json.load(fh)["suggestions"]]
     log(post_review(os.environ["GITHUB_REPOSITORY"], pr, sha, sugs, token) if sugs and token else "no suggestions or no token")
     return 0
@@ -93,21 +96,30 @@ def cmd_schema(a: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: List[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="vibeci")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("scan")
-    s.add_argument("--base"), s.add_argument("--head", default="HEAD")
+    s.add_argument("--base")
+    s.add_argument("--head", default="HEAD")
     s.add_argument("--profile", choices=["fast", "balanced", "deep"], default="balanced")
-    s.add_argument("--llm-url", default=""), s.add_argument("--no-llm", action="store_true")
+    s.add_argument("--llm-url", default="")
+    s.add_argument("--no-llm", action="store_true")
     s.add_argument("--transport", choices=["anthropic", "grammar"], default="anthropic")
-    s.add_argument("--model", default="local"), s.add_argument("--max-llm", type=int, default=5)
-    s.add_argument("--llm-budget", type=float, default=150.0), s.add_argument("--llm-timeout", type=float, default=120.0)
-    s.add_argument("--out", default="vibeci-out"), s.add_argument("--fail-on", choices=["none", "error"], default="none")
+    s.add_argument("--model", default="local")
+    s.add_argument("--max-llm", type=int, default=5)
+    s.add_argument("--llm-budget", type=float, default=150.0)
+    s.add_argument("--llm-timeout", type=float, default=120.0)
+    s.add_argument("--out", default="vibeci-out")
+    s.add_argument("--fail-on", choices=["none", "error"], default="none")
     s.set_defaults(fn=cmd_scan)
-    q = sub.add_parser("post"); q.add_argument("--out", default="vibeci-out"); q.set_defaults(fn=cmd_post)
-    d = sub.add_parser("doctor"); d.add_argument("--llm-url", default="http://127.0.0.1:8080")
-    d.add_argument("--model", default="local"); d.set_defaults(fn=cmd_doctor)
+    q = sub.add_parser("post")
+    q.add_argument("--out", default="vibeci-out")
+    q.set_defaults(fn=cmd_post)
+    d = sub.add_parser("doctor")
+    d.add_argument("--llm-url", default="http://127.0.0.1:8080")
+    d.add_argument("--model", default="local")
+    d.set_defaults(fn=cmd_doctor)
     sub.add_parser("schema").set_defaults(fn=cmd_schema)
     a = p.parse_args(argv)
     return a.fn(a)

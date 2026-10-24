@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'arena/**'
+  pull_request:
+  workflow_dispatch:
+
+# No default token scopes. Each job grants only what it needs.
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Both locks are hash-checked; --no-deps means no resolver can pull in
+      # anything that is not listed with a SHA-256 in one of the two files.
+      - name: Install hash-locked dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --require-hashes --no-deps -r requirements.lock -r requirements-dev.lock
+          python -m pip check
+
+      - name: Byte-compile all modules
+        run: python -m compileall -q vibeci tests
+
+      - name: Unit, integration and repository-integrity tests
+        run: python -m pytest -q tests
+
+      # Dogfood the action's own scan path (no model download) against this commit.
+      - name: Self-scan (deterministic, no model)
+        env:
+          VIBECI_OUT: ${{ runner.temp }}/vibeci-out
+        run: |
+          set -euo pipefail
+          python -m vibeci scan --no-llm --profile fast --fail-on error --out "$VIBECI_OUT"
+          python - <<'PY'
+          import json
+          import os
+
+          with open(os.path.join(os.environ["VIBECI_OUT"], "review.json"), encoding="utf-8") as fh:
+              doc = json.load(fh)
+          assert isinstance(doc.get("suggestions"), list), "review.json has no suggestions array"
+          print(f"self-scan OK: {len(doc['suggestions'])} suggestion(s)")
+          PY
+
+  lint:
+    name: lint (python, shell, workflows)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Install hash-locked tooling
+        run: |
+          set -euo pipefail
+          python -m pip install --require-hashes --no-deps -r requirements.lock -r requirements-dev.lock
+
+      - name: Ruff
+        run: python -m ruff check .
+
+      - name: Shell (bash -n + ShellCheck)
+        run: |
+          set -euo pipefail
+          for f in scripts/*.sh; do bash -n "$f"; done
+          shellcheck scripts/*.sh
+
+      # zizmor: security audits + strict YAML/schema collection (including
+      # dependabot.yml). Offline => no advisory DB, no token needed.
+      - name: zizmor (workflow security audit)
+        run: |
+          set -euo pipefail
+          zizmor --offline --no-progress --strict-collection --collect=all --format plain \
+            .github/workflows .github/dependabot.yml action.yml
+
+      # actionlint: workflow syntax, expression types and job/step references.
+      # Release asset pinned by its upstream SHA-256 (GitHub API asset digest).
+      - name: Install actionlint (hash-verified)
+        env:
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          ACTIONLINT_URL: https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            -o "$RUNNER_TEMP/actionlint.tar.gz" "$ACTIONLINT_URL"
+          echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -version
+
+      - name: actionlint
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/actionlint" -shellcheck= -pyflakes= -color
