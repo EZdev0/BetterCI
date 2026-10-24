@@ -2,7 +2,17 @@
 
 **Deterministic-first CI triage with a local 7B model. One-click fixes as native GitHub suggestions. No API keys. Code never leaves the runner.**
 
-![CI](https://github.com/EZdev0/BetterCI/actions/workflows/ci.yml/badge.svg) ![status](https://img.shields.io/badge/status-v0.1%20alpha-orange) ![license](https://img.shields.io/badge/license-MIT-blue) ![runner](https://img.shields.io/badge/runner-ubuntu--latest-lightgrey) ![keys](https://img.shields.io/badge/API%20keys-0-brightgreen)
+![CI](https://github.com/EZdev0/BetterCI/actions/workflows/ci.yml/badge.svg) ![status](https://img.shields.io/badge/status-v0.1%20alpha-orange) ![license](https://img.shields.io/badge/license-MIT-blue) ![runner](https://img.shields.io/badge/runner-ubuntu--24.04-lightgrey) ![keys](https://img.shields.io/badge/API%20keys-0-brightgreen)
+
+## Documentation
+
+All documentation in this repository is in English.
+
+* [Architecture](docs/ARCHITECTURE.md) – pipeline, trust boundaries, data flow.
+* [Error register](docs/ERRORS.md) – tracked defects, root causes, fixes and regression tests.
+* [Research dossier](docs/RESEARCH.md) – dated evidence with confidence labels.
+* [Research prompt](docs/RESEARCH_PROMPT.md) and [roadmap](docs/ROADMAP.md).
+* [Contributing](CONTRIBUTING.md), [Security policy](SECURITY.md), [Changelog](CHANGELOG.md).
 
 ## Why
 AI reviewers fail in CI for three reasons: they spam, they hallucinate broken patches, and they need a cloud key. VibeCI inverts the order:
