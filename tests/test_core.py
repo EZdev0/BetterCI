@@ -7,11 +7,18 @@ import pytest
 from pydantic import ValidationError
 
 sys.path.insert(0, os.path.dirname(__file__))
-import mock_llm  # noqa: E402
-from vibeci import cli, diffmap, gate  # noqa: E402
-from vibeci.llm import LLMClient  # noqa: E402
-from vibeci.models import FixProposal, Suggestion  # noqa: E402
-from vibeci.review import render_body, to_comments  # noqa: E402
+import mock_llm
+
+from vibeci import cli, diffmap, gate
+from vibeci.llm import LLMClient
+from vibeci.models import FixProposal, Suggestion
+from vibeci.review import render_body, to_comments
+
+
+def _suggestions(out="out"):
+    with open(os.path.join(out, "review.json"), encoding="utf-8") as fh:
+        return json.load(fh)["suggestions"]
+
 
 DIFF = """diff --git a/a.py b/a.py
 --- a/a.py
@@ -35,7 +42,8 @@ def test_diffmap_rejects_unsafe_ref():
 
 
 def test_proposal_rules():
-    ok = dict(verdict="fix", bug="bug here", start_line=1, end_line=1, replacement="x", confidence="high")
+    ok = {"verdict": "fix", "bug": "bug here", "start_line": 1, "end_line": 1,
+          "replacement": "x", "confidence": "high"}
     FixProposal(**ok)
     with pytest.raises(ValidationError):
         FixProposal(**{**ok, "replacement": None})
@@ -88,9 +96,14 @@ def repo(tmp_path, monkeypatch):
     def git(*a):
         subprocess.run(["git", *a], cwd=tmp_path, check=True, capture_output=True)
 
-    git("init", "-q", "-b", "main"); git("config", "user.email", "t@t"); git("config", "user.name", "t")
-    (tmp_path / "app.py").write_text(BASE); git("add", "-A"); git("commit", "-qm", "base")
-    (tmp_path / "app.py").write_text(HEAD); git("commit", "-qam", "head")
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    (tmp_path / "app.py").write_text(BASE)
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    (tmp_path / "app.py").write_text(HEAD)
+    git("commit", "-qam", "head")
     monkeypatch.chdir(tmp_path)
     return tmp_path
 
@@ -106,7 +119,7 @@ def test_e2e_tool_fix_plus_llm_fix(repo, transport):
     mock_llm.REPLY["value"] = GOOD
     rc = cli.main(["scan", "--base", "HEAD~1", "--llm-url", url, "--transport", transport, "--out", "out"])
     assert rc == 0
-    sugs = json.load(open("out/review.json"))["suggestions"]
+    sugs = _suggestions()
     by_src = {s["source"]: s for s in sugs}
     assert "tool" in by_src and "import os" not in by_src["tool"]["replacement"]  # F401 removed deterministically
     assert by_src["llm"]["replacement"].lstrip().startswith("with open")
@@ -126,7 +139,7 @@ def test_e2e_bad_model_output_never_posts_llm_fix(repo, bad):
     srv, url = mock_llm.start()
     mock_llm.REPLY["value"] = bad
     cli.main(["scan", "--base", "HEAD~1", "--llm-url", url, "--out", "out"])
-    sugs = json.load(open("out/review.json"))["suggestions"]
+    sugs = _suggestions()
     for s in sugs:
         if s["source"] == "llm":
             patched = gate.apply_replacement(HEAD, s["start_line"], s["end_line"], s["replacement"])
@@ -137,5 +150,5 @@ def test_e2e_bad_model_output_never_posts_llm_fix(repo, bad):
 
 def test_no_llm_mode_is_deterministic(repo):
     cli.main(["scan", "--base", "HEAD~1", "--no-llm", "--out", "out"])
-    sugs = json.load(open("out/review.json"))["suggestions"]
+    sugs = _suggestions()
     assert sugs and all(s["source"] == "tool" for s in sugs)

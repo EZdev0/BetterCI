@@ -5,7 +5,7 @@ Konfidenz: [SICHER] selbst geprüft (Binary, Tests, Lockfiles) · [WAHRSCHEINLIC
 ## 1. Runner
 - [WAHRSCHEINLICH] Public Repos: 4 vCPU / 16 GB RAM / ~14 GB SSD auf `ubuntu-latest`; private Repos kleiner (2 vCPU). Quelle: GitHub Docs "GitHub-hosted runners".
 - [WAHRSCHEINLICH] Cache: 10 GB Standard pro Repo, seit 2025-11 darüber hinaus kostenpflichtig möglich; 7 Tage ohne Zugriff = Eviction (GitHub Changelog 2025-11-20).
-- [UNSICHER] Reale CPU-Tokenraten eines 7B Q4 auf diesen Runnern: keine belastbare Messung gefunden. Ableitung aus Blog-Zahlen: Prefill eher zweistellig tok/s. Deshalb `benchmark.yml`.
+- [UNSICHER] Reale CPU-Tokenraten eines 7B Q4 auf diesen Runnern: keine belastbare Messung gefunden. Ableitung aus Blog-Zahlen: Prefill eher zweistellig tok/s. Deshalb messbare Benchmark-Kommandos in `README.md` (ein `benchmark.yml` existiert noch nicht).
 
 ## 2. Lokale Modelle 2026
 - [WAHRSCHEINLICH] Kleine Kandidaten: Qwen2.5-Coder-7B (Apache-2.0), Qwen3.5 4B/9B, Gemma 4 E4B, Granite 4.x. Große MoE-Coder (30B-A3B+) passen nicht in 16 GB.

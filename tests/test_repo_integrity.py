@@ -1,0 +1,110 @@
+"""CI guards for the repository itself.
+
+These tests fail on unsafe workflow edits, stale schemas, unpinned actions and
+lockfiles without hashes -- i.e. exactly the classes of error a CI job should
+catch before they reach a release.
+"""
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+import yaml
+
+from vibeci.models import fix_schema
+
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOWS = sorted((ROOT / ".github/workflows").glob("*.y*ml"))
+SHA_PIN = re.compile(r"[0-9a-f]{40}")
+SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+def _load(path: Path):
+    with path.open(encoding="utf-8") as fh:
+        return yaml.safe_load(fh)
+
+
+def test_committed_fix_schema_matches_pydantic_model():
+    with (ROOT / "schemas/fix.schema.json").open(encoding="utf-8") as fh:
+        assert json.load(fh) == fix_schema(), "regenerate schemas/fix.schema.json from `python -m vibeci schema`"
+
+
+def test_tools_lock_uses_full_hashes_and_pinned_revisions():
+    data = json.loads((ROOT / "tools.lock.json").read_text(encoding="utf-8"))
+    assert SHA256.fullmatch(data["llama_cpp"]["sha256"])
+    assert "/releases/download/b" in data["llama_cpp"]["url"]
+    for model in data["models"].values():
+        assert SHA_PIN.fullmatch(model["revision"])
+        assert SHA256.fullmatch(model["sha256"])
+
+
+def test_lock_files_hash_every_pinned_package():
+    for name in ("requirements.lock", "requirements-dev.lock"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        blocks = [b for b in re.split(r"\n(?=[A-Za-z0-9_.-]+==)", text)
+                  if re.match(r"[A-Za-z0-9_.-]+==", b)]
+        assert blocks, f"{name} contains no pinned packages"
+        for block in blocks:
+            assert "--hash=sha256:" in block, (name, block.splitlines()[0])
+
+
+def test_every_action_reference_is_a_full_commit_sha_with_version_comment():
+    for path in [ROOT / "action.yml", *WORKFLOWS]:
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if "uses:" not in line:
+                continue
+            ref = line.split("uses:", 1)[1].strip().split("#")[0].strip()
+            assert "@" in ref, (path.name, lineno, ref)
+            assert SHA_PIN.fullmatch(ref.rsplit("@", 1)[1]), (path.name, lineno, ref)
+            assert re.search(r"#\s*v?\d+\.\d+", line), (path.name, lineno, "missing version comment")
+
+
+def test_workflows_are_least_privilege_bounded_and_injection_safe():
+    assert WORKFLOWS, "no CI workflows found"
+    for path in WORKFLOWS:
+        data = _load(path)
+        # PyYAML follows YAML 1.1 and parses the `on` key as boolean True.
+        triggers = data.get("on", data.get(True))
+        assert triggers, path.name
+        assert "pull_request_target" not in triggers, path.name
+        assert "workflow_run" not in triggers, path.name
+        assert data.get("permissions") == {}, path.name
+        assert "concurrency" in data, path.name
+        for job_name, job in data["jobs"].items():
+            assert job.get("timeout-minutes"), (path.name, job_name)
+            assert job.get("permissions"), (path.name, job_name)
+            for step in job.get("steps", []):
+                if isinstance(step.get("run"), str):
+                    assert "${{" not in step["run"], (path.name, job_name, "expression in run:")
+                if step.get("uses", "").startswith("actions/checkout@"):
+                    assert step.get("with", {}).get("persist-credentials") is False, (path.name, job_name)
+
+
+def test_action_metadata_is_complete():
+    action = _load(ROOT / "action.yml")
+    assert action["runs"]["using"] == "composite"
+    for name, spec in action["inputs"].items():
+        assert spec.get("description"), name
+        assert "default" in spec, name
+    for step in action["runs"]["steps"]:
+        if "run" in step:
+            assert step.get("shell") == "bash", step.get("name")
+
+
+def test_readme_documents_all_action_inputs():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for name in _load(ROOT / "action.yml")["inputs"]:
+        assert f"`{name}`" in readme, f"README is missing input {name}"
+
+
+def test_all_repo_yaml_and_json_parse():
+    paths = [ROOT / "action.yml", ROOT / "tools.lock.json", ROOT / "schemas/fix.schema.json",
+             ROOT / ".github/dependabot.yml", ROOT / "grammars/fix.gbnf", *WORKFLOWS]
+    for path in paths:
+        if path.suffix == ".json":
+            json.loads(path.read_text(encoding="utf-8"))
+        elif path.suffix in (".yml", ".yaml"):
+            assert isinstance(_load(path), dict), path
+        else:
+            assert path.read_text(encoding="utf-8").strip(), path

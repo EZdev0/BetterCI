@@ -3,16 +3,21 @@
 Principle: never trust a patch because it parses; require that it does not
 make the file worse. Every language gets (1) a syntax check and (2) a
 no-regression check against the original file.
+
+No-regression is compared *per rule code*, not by total finding count: a patch
+that fixes one F401 but introduces one S110 must not be accepted just because
+the total stayed the same.
 """
 from __future__ import annotations
 
 import ast
+import json
 import os
 import shutil
 import subprocess
 import tempfile
+from collections import Counter
 from dataclasses import dataclass
-from typing import List, Optional
 
 
 @dataclass
@@ -32,21 +37,56 @@ def apply_replacement(source: str, start: int, end: int, replacement: str) -> st
     return "".join(lines[: start - 1]) + new + "".join(lines[end:])
 
 
-def _run(cmd: List[str], cwd: Optional[str] = None, timeout: int = 30) -> subprocess.CompletedProcess:
+def _run(cmd: list[str], cwd: str | None = None, timeout: int = 30) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd, check=False)
 
 
-def _py_ruff_count(source: str, filename: str) -> Optional[int]:
+def _regression_reason(before: Counter[str] | None, after: Counter[str] | None, tool: str) -> str | None:
+    """Reject when any rule code is more frequent in the patched file."""
+    if before is None or after is None:
+        return None
+    added = {code: n - before[code] for code, n in after.items() if n > before[code]}
+    if not added:
+        return None
+    detail = ", ".join(f"{code}+{n}" for code, n in sorted(added.items()))
+    return f"new {tool} findings: {detail}"
+
+
+def _py_ruff_codes(source: str, filename: str) -> Counter[str] | None:
     if not shutil.which("ruff"):
         return None
     proc = subprocess.run(
-        ["ruff", "check", "--no-fix", "--exit-zero", "--output-format", "concise", "--stdin-filename", filename, "-"],
+        ["ruff", "check", "--no-fix", "--exit-zero", "--output-format", "json", "--stdin-filename", filename, "-"],
         input=source, capture_output=True, text=True, timeout=30, check=False,
     )
-    return sum(1 for ln in proc.stdout.splitlines() if ln.strip() and not ln.startswith(("Found", "All checks", "[*]", "No fixes")))
+    try:
+        raw = json.loads(proc.stdout)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(raw, list):
+        return None
+    return Counter(item.get("code", "?") for item in raw if isinstance(item, dict))
 
 
-def _compiler_errors(path: str, source: str) -> Optional[int]:
+def _shellcheck_codes(source: str, ext: str) -> Counter[str] | None:
+    if not shutil.which("shellcheck"):
+        return None
+    with tempfile.NamedTemporaryFile("w", suffix=ext, delete=False, encoding="utf-8") as fh:
+        fh.write(source)
+        tmp = fh.name
+    try:
+        proc = _run(["shellcheck", "-f", "json1", tmp], timeout=30)
+    finally:
+        os.unlink(tmp)
+    try:
+        raw = json.loads(proc.stdout)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    comments = raw.get("comments", []) if isinstance(raw, dict) else []
+    return Counter(f"SC{c.get('code', '?')}" for c in comments if isinstance(c, dict))
+
+
+def _compiler_errors(path: str, source: str) -> int | None:
     cxx = path.endswith((".cc", ".cpp", ".cxx", ".hpp", ".hh"))
     exe = shutil.which("g++" if cxx else "gcc")
     if not exe:
@@ -73,9 +113,9 @@ def check_patched(path: str, original: str, patched: str) -> GateResult:
             compile(patched, path, "exec", dont_inherit=True)
         except (SyntaxError, ValueError) as exc:
             return GateResult(False, f"python syntax: {exc}")
-        before, after = _py_ruff_count(original, path), _py_ruff_count(patched, path)
-        if before is not None and after is not None and after > before:
-            return GateResult(False, f"ruff findings increased {before}->{after}")
+        why = _regression_reason(_py_ruff_codes(original, path), _py_ruff_codes(patched, path), "ruff")
+        if why:
+            return GateResult(False, why)
         return GateResult(True, "python ok")
 
     if ext in (".sh", ".bash"):
@@ -87,14 +127,18 @@ def check_patched(path: str, original: str, patched: str) -> GateResult:
                 return GateResult(False, "bash -n failed")
         finally:
             os.unlink(tmp)
-        return GateResult(True, "shell syntax ok")
+        why = _regression_reason(_shellcheck_codes(original, ext), _shellcheck_codes(patched, ext), "shellcheck")
+        if why:
+            return GateResult(False, why)
+        return GateResult(True, "shell syntax + shellcheck ok")
 
     if ext in (".yml", ".yaml"):
         try:
             import yaml
 
             yaml.safe_load(patched)
-        except Exception as exc:  # noqa: BLE001 - any parse failure rejects
+        # Any parse failure rejects.
+        except Exception as exc:  # noqa: BLE001
             return GateResult(False, f"yaml: {str(exc)[:120]}")
         return GateResult(True, "yaml ok")
 

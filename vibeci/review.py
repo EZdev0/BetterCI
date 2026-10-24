@@ -3,12 +3,10 @@ blocks) and post them. Posting never fails the build."""
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 import urllib.error
 import urllib.request
-from typing import Dict, List, Optional, Set
 
 from .diffmap import contiguous
 from .gate import apply_replacement, check_patched
@@ -25,7 +23,7 @@ def _overlaps(a: Suggestion, b: Suggestion) -> bool:
     return a.path == b.path and not (a.end_line < b.start_line or b.end_line < a.start_line)
 
 
-def _validated(path: str, source: str, start: int, end: int, rep: str, visible: Set[int]) -> Optional[str]:
+def _validated(path: str, source: str, start: int, end: int, rep: str, visible: set[int]) -> str | None:
     if not contiguous(visible, start, end):
         return "lines not in diff"
     try:
@@ -36,9 +34,9 @@ def _validated(path: str, source: str, start: int, end: int, rep: str, visible: 
     return None if res.ok else res.reason
 
 
-def build_suggestions(findings: List[Finding], diff_map: Dict[str, Set[int]], client: Optional[LLMClient],
-                      max_llm: int, budget_s: float, max_total: int = 20) -> List[Suggestion]:
-    out: List[Suggestion] = []
+def build_suggestions(findings: list[Finding], diff_map: dict[str, set[int]], client: LLMClient | None,
+                      max_llm: int, budget_s: float, max_total: int = 20) -> list[Suggestion]:
+    out: list[Suggestion] = []
     findings = sorted(findings, key=lambda f: (_SEV_RANK[f.severity], f.path, f.line))
     # 1) deterministic fixes first: zero hallucination risk, zero LLM time
     for f in findings:
@@ -105,7 +103,7 @@ def render_body(s: Suggestion) -> str:
             f"{fence}suggestion\n{rep}{fence}\n<!-- vibeci:fp={s.fingerprint} -->")
 
 
-def to_comments(sugs: List[Suggestion]) -> List[dict]:
+def to_comments(sugs: list[Suggestion]) -> list[dict]:
     comments = []
     for s in sugs:
         c = {"path": s.path, "line": s.end_line, "side": "RIGHT", "body": render_body(s)}
@@ -116,12 +114,16 @@ def to_comments(sugs: List[Suggestion]) -> List[dict]:
 
 
 # -------------------------------------------------------------- posting ---
-def _api(method: str, url: str, token: str, payload: Optional[dict] = None) -> tuple:
-    req = urllib.request.Request(url, method=method, data=json.dumps(payload).encode() if payload is not None else None,
-                                 headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
-                                          "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json"})
+def _api(method: str, url: str, token: str, payload: dict | None = None) -> tuple:
+    req = urllib.request.Request(  # noqa: S310
+        url, method=method,
+        data=json.dumps(payload).encode() if payload is not None else None,
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+                 "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json"},
+    )
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310 - fixed api.github.com host
+        # Only the constant api.github.com host is used here.
+        with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310
             return r.status, json.loads(r.read() or b"null")
     except urllib.error.HTTPError as e:
         return e.code, {"error": e.read().decode()[:300]}
@@ -129,8 +131,8 @@ def _api(method: str, url: str, token: str, payload: Optional[dict] = None) -> t
         return 0, {"error": str(e)}
 
 
-def existing_fingerprints(repo: str, pr: int, token: str) -> Set[str]:
-    seen: Set[str] = set()
+def existing_fingerprints(repo: str, pr: int, token: str) -> set[str]:
+    seen: set[str] = set()
     for page in range(1, 6):
         code, data = _api("GET", f"https://api.github.com/repos/{repo}/pulls/{pr}/comments?per_page=100&page={page}", token)
         if code != 200 or not isinstance(data, list) or not data:
@@ -140,7 +142,7 @@ def existing_fingerprints(repo: str, pr: int, token: str) -> Set[str]:
     return seen
 
 
-def post_review(repo: str, pr: int, sha: str, sugs: List[Suggestion], token: str) -> str:
+def post_review(repo: str, pr: int, sha: str, sugs: list[Suggestion], token: str) -> str:
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
         return "invalid repo"
     seen = existing_fingerprints(repo, pr, token)
@@ -148,7 +150,7 @@ def post_review(repo: str, pr: int, sha: str, sugs: List[Suggestion], token: str
     if not fresh:
         return "nothing new to post"
     body = f"VibeCI found {len(fresh)} one-click fix(es). Each is a native suggestion: *Add suggestion to batch*."
-    code, data = _api("POST", f"https://api.github.com/repos/{repo}/pulls/{pr}/reviews", token,
+    code, _ = _api("POST", f"https://api.github.com/repos/{repo}/pulls/{pr}/reviews", token,
                       {"commit_id": sha, "event": "COMMENT", "body": body, "comments": to_comments(fresh)})
     if code in (200, 201):
         return f"posted {len(fresh)} suggestion(s)"

@@ -1,0 +1,31 @@
+# Deterministic lint config: CI and local `ruff check .` select the same rules,
+# independent of Ruff's evolving default rule set. Ruff itself is hash-locked
+# in requirements.lock (0.16.9).
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+exclude = [".venv", "vibeci-out"]
+
+[tool.ruff.lint]
+select = [
+    "E4",   # import placement
+    "E7",   # statement style (incl. one statement per line)
+    "E9",   # runtime errors
+    "F",    # Pyflakes
+    "B",    # bugbear
+    "BLE",  # blind except
+    "S",    # bandit security
+    "SIM",  # simplifications
+    "I",    # import order
+    "RUF",  # Ruff-specific correctness
+    "UP",   # modern Python syntax
+    "C4",   # comprehensions
+    "PIE",  # misc lint
+    "FURB", # refurb suggestions
+]
+# Every subprocess call in this project passes an argv list (no shell=True), so
+# "partial path"/"untrusted input" audits are intentionally suppressed.
+ignore = ["S603", "S607"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S603", "S607", "PLR2004"]
