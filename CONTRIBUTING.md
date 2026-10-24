@@ -26,6 +26,15 @@ PYTHONPATH=. .venv/bin/python -m pytest -q tests
 
 CI (`.github/workflows/ci.yml`) runs these on Python 3.11, 3.12 and 3.13, plus a deterministic self-scan of the action.
 
+## Error tracking
+
+Errors are tracked in **Linear** (team `PRO`, project "BetterCI (VibeCI) - CI Hardening & Error Tracking") and mirrored in `docs/ERRORS.md`. For every defect, write down both:
+
+1. **How it happened** – the reproduction or observation and the root cause.
+2. **Solution path** – the fix, why it was chosen, and the regression test that keeps it fixed.
+
+Never invent data. If a tracking tool rejects or is missing an entry, record the gap in `docs/ERRORS.md` instead of silently dropping it.
+
 ## Rules
 
 - Every `uses:` reference in workflows and in `action.yml` must point to a full 40-character commit SHA with the release version in a trailing comment.

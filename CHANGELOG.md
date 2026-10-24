@@ -13,6 +13,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - `tests/test_regressions.py` and `tests/test_repo_integrity.py` (32 tests total).
 - `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md` and `.gitignore`.
 - English-only documentation; `docs/RESEARCH.md` translated from German.
+- Error tracking in Linear (team `PRO`, project "BetterCI (VibeCI) - CI Hardening & Error Tracking"), mirrored in `docs/ERRORS.md`. Every error records how it happened, its root cause, the solution path and the regression test. Vercel was a misunderstanding: it is not connected and this is a GitHub Action, not a Vercel deployment.
 
 ### Fixed
 
