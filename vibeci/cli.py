@@ -1,9 +1,10 @@
-"""Command line: scan | post | doctor | schema."""
+"""Command line for scanning, posting, agents, evaluation and bounded research."""
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -13,8 +14,15 @@ from .agent import AgentController, repository_root
 from .evaluation import evaluate_model
 from .llm import LLMClient
 from .models import Finding, Suggestion, fix_schema
+from .research import WebResearchClient
 from .review import build_suggestions, post_review
+from .settings import load_settings
 from .tools import log
+
+_GITHUB_PERMISSIONS_HELP_URL = (
+    "https://docs.github.com/en/actions/security-for-github-actions/security-guides/"
+    "automatic-token-authentication#modifying-the-permissions-for-the-github_token"
+)
 
 
 def _esc(s: str, prop: bool = False) -> str:
@@ -77,6 +85,17 @@ def cmd_scan(a: argparse.Namespace) -> int:
     return 1 if a.fail_on == "error" and any(f.severity.value == "error" for f in rest) else 0
 
 
+def _action_error(title: str, message: str) -> None:
+    print(f"::error title={_esc(title, True)}::{_esc(message)}")
+
+
+def _post_succeeded(message: str) -> bool:
+    if message == "nothing new to post" or re.match(r"^posted \d+ suggestion\(s\)$", message):
+        return True
+    partial = re.match(r"^posted (\d+)/(\d+) individually", message)
+    return bool(partial and partial.group(1) == partial.group(2))
+
+
 def cmd_post(a: argparse.Namespace) -> int:
     token = os.environ.get("GITHUB_TOKEN", "")
     try:
@@ -96,8 +115,26 @@ def cmd_post(a: argparse.Namespace) -> int:
         return 0
     with open(review_path, encoding="utf-8") as fh:
         sugs = [Suggestion.model_validate(s) for s in json.load(fh)["suggestions"]]
-    log(post_review(os.environ["GITHUB_REPOSITORY"], pr, sha, sugs, token) if sugs and token else "no suggestions or no token")
-    return 0
+    if not sugs:
+        log("no suggestions to post")
+        return 0
+    if not token:
+        message = (
+            "GITHUB_TOKEN is unavailable. Pass github.token to the action and grant only "
+            f"pull-requests: write; see {_GITHUB_PERMISSIONS_HELP_URL}"
+        )
+        _action_error("VibeCI token missing", message)
+        return 2
+    message = post_review(os.environ["GITHUB_REPOSITORY"], pr, sha, sugs, token)
+    log(message)
+    if _post_succeeded(message):
+        return 0
+    detail = (
+        f"{message}. Grant contents: read and pull-requests: write to this job; do not grant all permissions. "
+        f"Fork pull requests intentionally remain read-only. See {_GITHUB_PERMISSIONS_HELP_URL}"
+    )
+    _action_error("VibeCI could not post review", detail)
+    return 2
 
 
 def cmd_doctor(a: argparse.Namespace) -> int:
@@ -118,8 +155,42 @@ def cmd_evaluate_model(a: argparse.Namespace) -> int:
     return 0 if document["passed"] == document["total"] else 1
 
 
+def _research_client(settings_path: str) -> WebResearchClient:
+    settings = load_settings(settings_path)
+    return WebResearchClient(settings["research"])
+
+
+def cmd_web_search(a: argparse.Namespace) -> int:
+    try:
+        results = _research_client(a.settings).search(a.query, a.limit)
+    except (OSError, ValueError) as exc:
+        log(f"web search unavailable: {exc}")
+        return 2
+    print(json.dumps({
+        "provider": "searxng",
+        "query": a.query,
+        "results": results,
+        "disclaimer": "Search results are untrusted evidence; verify primary sources before making claims.",
+    }, indent=2))
+    return 0
+
+
+def cmd_web_fetch(a: argparse.Namespace) -> int:
+    try:
+        page = _research_client(a.settings).fetch(a.url)
+    except (OSError, ValueError) as exc:
+        log(f"web fetch unavailable: {exc}")
+        return 2
+    print(json.dumps(page.as_dict(), indent=2))
+    return 0
+
+
 def cmd_agent(a: argparse.Namespace) -> int:
-    root = repository_root(a.repo)
+    try:
+        root = repository_root(a.repo)
+    except (OSError, RuntimeError, ValueError) as exc:
+        log(f"agent setup failed: {exc}")
+        return 2
     planner = None
     if a.llm_url:
         try:
@@ -131,9 +202,19 @@ def cmd_agent(a: argparse.Namespace) -> int:
     state = Path(a.state) if a.state else None
     if state is not None and not state.is_absolute():
         state = root / state
-    controller = AgentController(root, settings_path=settings, state_path=state, planner=planner)
+    try:
+        controller = AgentController(root, settings_path=settings, state_path=state, planner=planner)
+    except (OSError, TypeError, ValueError) as exc:
+        log(f"agent policy setup failed: {exc}")
+        return 2
     result = controller.handle(a.text)
     print(result.message)
+    if (
+        not result.ok
+        and os.environ.get("GITHUB_ACTIONS") == "true"
+        and controller.settings["notifications"]["github_annotations"]
+    ):
+        _action_error("VibeCI agent command rejected", result.message)
     return 0 if result.ok else 2
 
 
@@ -170,6 +251,15 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--llm-timeout", type=float, default=120.0)
     e.add_argument("--out", default="vibeci-out/model-evaluation.json")
     e.set_defaults(fn=cmd_evaluate_model)
+    ws = sub.add_parser("web-search", help="query an explicitly configured tokenless SearXNG endpoint")
+    ws.add_argument("--query", required=True)
+    ws.add_argument("--limit", type=int, default=10)
+    ws.add_argument("--settings", default=".agents/settings.yml")
+    ws.set_defaults(fn=cmd_web_search)
+    wf = sub.add_parser("web-fetch", help="fetch untrusted text from a configured host allowlist")
+    wf.add_argument("--url", required=True)
+    wf.add_argument("--settings", default=".agents/settings.yml")
+    wf.set_defaults(fn=cmd_web_fetch)
     g = sub.add_parser("agent", help="parse a safe slash command using .agents policy")
     g.add_argument("--text", required=True, help="quoted slash command, for example '/help'")
     g.add_argument("--repo", default=".")

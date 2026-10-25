@@ -261,6 +261,51 @@ class ScheduleProposal(BaseModel):
     approved: bool = False
 
 
+class BlockingQuestion(BaseModel):
+    """A human clarification that pauses managed worker starts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question_id: str = Field(pattern=r"^q-[0-9a-f]{12}$")
+    team: str = Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")
+    prompt: str = Field(min_length=5, max_length=800)
+    trigger_codes: list[str] = Field(min_length=1, max_length=10)
+    context: list[str] = Field(default_factory=list, max_length=10)
+    status: Literal["open", "answered"] = "open"
+    answer: str | None = Field(default=None, max_length=1200)
+    created_at: str = Field(min_length=20, max_length=32)
+    answered_at: str | None = Field(default=None, min_length=20, max_length=32)
+
+    @model_validator(mode="after")
+    def _consistent_question(self) -> BlockingQuestion:
+        self.prompt = " ".join(self.prompt.strip().split())
+        self.trigger_codes = _unique_clean(self.trigger_codes, 80)
+        self.context = _unique_clean(self.context, 500)
+        if self.status == "open" and (self.answer is not None or self.answered_at is not None):
+            raise ValueError("open questions cannot contain an answer")
+        if self.status == "answered":
+            if self.answer is None or self.answered_at is None:
+                raise ValueError("answered questions require an answer and timestamp")
+            self.answer = " ".join(self.answer.strip().split())
+            if not self.answer:
+                raise ValueError("question answer cannot be empty")
+        return self
+
+
+class AgentNotification(BaseModel):
+    """A local durable notification; external delivery is a separate adapter."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    notification_id: str = Field(pattern=r"^n-[0-9a-f]{12}$")
+    level: Literal["notice", "warning", "error"]
+    title: str = Field(min_length=3, max_length=120)
+    message: str = Field(min_length=3, max_length=1000)
+    link: str | None = Field(default=None, max_length=1000)
+    created_at: str = Field(min_length=20, max_length=32)
+    acknowledged: bool = False
+
+
 class AgentState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -273,6 +318,8 @@ class AgentState(BaseModel):
     tasks: dict[str, TaskRuntime] = Field(default_factory=dict)
     schedules: list[ScheduleProposal] = Field(default_factory=list, max_length=20)
     stopped_agents: list[str] = Field(default_factory=list, max_length=50)
+    questions: list[BlockingQuestion] = Field(default_factory=list, max_length=20)
+    notifications: list[AgentNotification] = Field(default_factory=list, max_length=200)
     last_report: dict | None = None
 
     @model_validator(mode="after")
@@ -289,6 +336,10 @@ class AgentState(BaseModel):
         if (self.approved_plan_id is None) != (self.baseline_sha is None):
             raise ValueError("plan approval and baseline SHA must be recorded together")
         self.stopped_agents = _unique_clean(self.stopped_agents, 80)
+        if len({question.question_id for question in self.questions}) != len(self.questions):
+            raise ValueError("question IDs must be unique")
+        if len({notice.notification_id for notice in self.notifications}) != len(self.notifications):
+            raise ValueError("notification IDs must be unique")
         return self
 
 

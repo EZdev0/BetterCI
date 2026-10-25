@@ -12,10 +12,11 @@ import re
 import subprocess
 from dataclasses import asdict, dataclass, field
 from itertools import pairwise
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
-import yaml
+from .safety import redact_sensitive_text
+from .settings import path_scope_issue, safe_repo_path
 
 
 @dataclass(frozen=True)
@@ -47,19 +48,6 @@ class PolicyReport:
         }
 
 
-_REQUIRED_TOP_LEVEL = {
-    "version",
-    "repository_language",
-    "default_mode",
-    "state",
-    "goal",
-    "approval",
-    "changes",
-    "agents",
-    "verification",
-    "providers",
-    "schedules",
-}
 _DOC_SUFFIXES = {".md", ".rst", ".txt"}
 _GERMAN_WORDS = {
     "aber",
@@ -97,38 +85,6 @@ _SUSPICIOUS = [
 ]
 _CRON_FIELD = re.compile(r"^[\d*/,\-]+$")
 _CRON_LIMITS = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 6))
-
-
-def load_settings(path: str | os.PathLike[str]) -> dict[str, Any]:
-    """Load and minimally validate the reviewed repository policy."""
-    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ValueError("agent settings must be a mapping")
-    missing = _REQUIRED_TOP_LEVEL - set(raw)
-    extra = set(raw) - _REQUIRED_TOP_LEVEL
-    if missing or extra:
-        raise ValueError(f"agent settings keys mismatch; missing={sorted(missing)}, extra={sorted(extra)}")
-    if raw.get("version") != 1 or raw.get("repository_language") != "English":
-        raise ValueError("unsupported agent settings version or repository language")
-    commands = raw.get("verification", {}).get("commands", [])
-    if not commands or not all(
-        isinstance(cmd, list) and cmd and all(isinstance(arg, str) for arg in cmd) for cmd in commands
-    ):
-        raise ValueError("verification commands must be non-empty argv arrays")
-    return raw
-
-
-def safe_repo_path(value: str) -> str:
-    """Normalize a repository-relative POSIX path or reject it."""
-    if not value or "\x00" in value or "\\" in value:
-        raise ValueError(f"unsafe repository path: {value!r}")
-    path = PurePosixPath(value)
-    if path.is_absolute() or ".." in path.parts or path.parts[0] in {".git", ".vibeci"}:
-        raise ValueError(f"unsafe repository path: {value!r}")
-    clean = path.as_posix().removeprefix("./")
-    if not clean or len(clean) > 300:
-        raise ValueError(f"unsafe repository path: {value!r}")
-    return clean
 
 
 def _expand_cron_field(field: str, minimum: int, maximum: int) -> set[int]:
@@ -276,9 +232,13 @@ def _scope_issues(
     raw: str,
     allowed: set[str],
     change_cfg: dict[str, Any],
+    settings: dict[str, Any],
 ) -> list[PolicyIssue]:
     """Check deletion, rename, approved-scope and protected-path policy."""
     issues: list[PolicyIssue] = []
+    scope_problem = path_scope_issue(path, settings)
+    if scope_problem:
+        issues.append(PolicyIssue("OUTSIDE_AGENT_SCOPE", "critical", path, scope_problem, raw))
     if status.startswith("D") and change_cfg.get("forbid_file_deletion", True):
         issues.append(PolicyIssue("FILE_DELETED", "critical", path, "tracked file deletion is forbidden", raw))
     if status.startswith("R") and change_cfg.get("forbid_renames", True):
@@ -420,7 +380,7 @@ def evaluate_changes(
             issues.append(PolicyIssue("UNSAFE_PATH", "critical", raw_path, str(exc), raw))
             continue
         changed.append(path)
-        issues.extend(_scope_issues(path, status, raw, allowed, change_cfg))
+        issues.extend(_scope_issues(path, status, raw, allowed, change_cfg, settings))
         issues.extend(_file_issues(cwd, baseline, path, status, deleted_lines, change_cfg))
 
     if not changed:
@@ -477,7 +437,7 @@ def run_verification_commands(
                 "argv": command,
                 "returncode": proc.returncode,
                 "duration_seconds": round(__import__("time").monotonic() - started, 3),
-                "output": (proc.stdout + proc.stderr)[-2000:],
+                "output": redact_sensitive_text(proc.stdout + proc.stderr)[-2000:],
             }
         except (OSError, subprocess.TimeoutExpired) as exc:
             result = {

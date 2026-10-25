@@ -106,7 +106,7 @@ def check_patched(path: str, original: str, patched: str) -> GateResult:
     """Return ok=True only if `patched` is a safe replacement for `original`."""
     if patched == original:
         return GateResult(False, "patch is a no-op")
-    if len(patched) > 400_000:
+    if len(original) > 400_000 or len(patched) > 400_000:
         return GateResult(False, "file too large for gate")
     original_lines = original.splitlines()
     patched_lines = patched.splitlines()
@@ -114,7 +114,9 @@ def check_patched(path: str, original: str, patched: str) -> GateResult:
     deleted = sum(
         old_end - old_start
         for operation, old_start, old_end, _new_start, _new_end in difflib.SequenceMatcher(
-            a=original_lines, b=patched_lines, autojunk=False,
+            a=original_lines,
+            b=patched_lines,
+            autojunk=max(len(original_lines), len(patched_lines)) > 2000,
         ).get_opcodes()
         if operation in {"delete", "replace"}
     )

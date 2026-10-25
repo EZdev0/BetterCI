@@ -4,21 +4,29 @@ This is intentionally not a free-form coding agent. It is a deterministic
 control plane around an optional loopback-only planner. Model text can propose
 plans, but cannot approve, execute shell text, bypass paths or merge branches.
 """
+
 from __future__ import annotations
 
 import json
 import os
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 
 from pydantic import ValidationError
 
 from . import agent_parser
+from .agent_types import CommandResult
+from .bigbrain import BigBrainCommands
+from .knowledge import KnowledgeJournal
 from .llm import LLMClient
 from .models import AgentState, PlanTask, ScheduleProposal, TaskRuntime
-from .policy import evaluate_changes, load_settings, run_verification_commands, validate_cron
+from .orchestration import load_teams
+from .policy import evaluate_changes, run_verification_commands, validate_cron
+from .safety import classify_request, redact_sensitive_text
+from .settings import load_settings
 
 _HELP = """VibeCI agent commands:
 /help
@@ -32,17 +40,17 @@ _HELP = """VibeCI agent commands:
 /review standard|advanced
 /restore <task-id>
 /stop <agent-id>
+/ask <team> -- "<question>" [--ref <context>]
+/answer <question-id> -- "<answer>"
+/teams
+/brief <team> -- "<bounded request>"
+/note <team> <decision|evidence|handoff|observation|warning> -- "<text>" --ref <evidence>
+/context
+/notifications [all|open]
+/ack <notification-id>
 /schedule "<five-field-cron>" -- /verify|/status
 
-Planning is read-only. Writes require an approved plan and an isolated managed worktree. /approve never merges."""
-
-
-@dataclass(frozen=True)
-class CommandResult:
-    ok: bool
-    changed: bool
-    message: str
-    data: dict | None = None
+Planning is read-only. Writes require an approved plan and an isolated managed worktree. Open questions pause workers. /brief never launches a provider, and /approve never merges."""
 
 
 class StateStore:
@@ -54,7 +62,10 @@ class StateStore:
             return AgentState()
         try:
             return AgentState.model_validate_json(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValidationError, ValueError) as exc:
+        except ValidationError as exc:
+            errors = exc.errors(include_url=False, include_input=False)[:5]
+            raise ValueError(f"invalid agent state {self.path}: schema errors {errors}") from exc
+        except (OSError, ValueError) as exc:
             raise ValueError(f"invalid agent state {self.path}: {exc}") from exc
 
     def save(self, state: AgentState) -> None:
@@ -84,13 +95,14 @@ def repository_root(start: str | os.PathLike[str] = ".") -> Path:
     return Path(proc.stdout.strip()).resolve()
 
 
-class AgentController:
+class AgentController(BigBrainCommands):
     def __init__(
         self,
         root: Path,
         settings_path: Path | None = None,
         state_path: Path | None = None,
         planner: LLMClient | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.root = root.resolve()
         self.settings_path = settings_path or self.root / ".agents/settings.yml"
@@ -98,11 +110,26 @@ class AgentController:
         configured_state = self.settings["state"]["file"]
         self.store = StateStore(state_path or self.root / configured_state)
         self.planner = planner
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
+        teams_path = (self.root / self.settings["orchestration"]["teams_file"]).resolve()
+        if teams_path != self.root and self.root not in teams_path.parents:
+            raise ValueError("team settings must stay inside the repository")
+        self.teams = load_teams(teams_path)
+        self.knowledge = KnowledgeJournal(
+            self.root,
+            self.settings["orchestration"]["knowledge_directory"],
+            set(self.teams),
+            int(self.settings["orchestration"]["maximum_note_chars"]),
+            self.clock,
+        )
 
     def handle(self, text: str) -> CommandResult:
         try:
             command, args = agent_parser.parse_tokens(text)
+            new_state = not self.store.path.exists()
             state = self.store.load()
+            if new_state:
+                state.mode = self.settings["default_mode"]
         except ValueError as exc:
             return CommandResult(False, False, str(exc))
         handler = getattr(self, f"_cmd_{command[1:].replace('-', '_')}", None)
@@ -131,6 +158,34 @@ class AgentController:
 
     def _cmd_goal(self, state: AgentState, args: list[str]) -> CommandResult:
         goal = agent_parser.goal_from_args(args)
+        goal_settings = self.settings["goal"]
+        if len(goal.acceptance_criteria) < int(goal_settings["minimum_acceptance_criteria"]):
+            raise ValueError("goal has fewer acceptance criteria than repository policy requires")
+        if len(goal.references) < int(goal_settings["minimum_references"]):
+            raise ValueError("goal has fewer evidence references than repository policy requires")
+        if len(goal.objective) > int(goal_settings["maximum_objective_chars"]) or any(
+            len(criterion) > int(goal_settings["maximum_criterion_chars"])
+            for criterion in goal.acceptance_criteria
+        ):
+            raise ValueError("goal text exceeds repository policy bounds")
+        request_text = " ".join([goal.objective, *goal.acceptance_criteria, *goal.references])
+        if redact_sensitive_text(request_text) != request_text:
+            raise ValueError("goals and evidence references cannot contain credential-like data")
+        signals = classify_request(request_text)
+        if signals:
+            question = self._record_question(
+                state,
+                "security",
+                self._risk_prompt(signals),
+                [signal.code for signal in signals],
+                [signal.evidence for signal in signals],
+            )
+            return CommandResult(
+                False,
+                True,
+                f"Goal was not recorded. Security question {question.question_id} must be answered, then submit a safe goal.",
+                {"question": question.model_dump(), "signals": [signal.as_dict() for signal in signals]},
+            )
         state.goal = goal
         state.plan = None
         state.approved_plan_id = None
@@ -143,16 +198,22 @@ class AgentController:
             raise ValueError("/plan takes no arguments")
         if state.goal is None:
             raise ValueError("set an evidence-backed /goal before planning")
+        self._require_no_open_questions(state)
         if self.planner is None:
             raise ValueError("/plan requires a configured loopback local model; no provider fallback is enabled")
-        plan = self.planner.plan(state.goal, agent_parser.repo_manifest(self.root))
+        plan = self.planner.plan(state.goal, agent_parser.repo_manifest(self.root, self.settings))
         if plan is None:
             raise RuntimeError("local planner did not return a valid plan")
-        state.plan = agent_parser.validate_plan(self.root, state.goal, plan)
+        state.plan = agent_parser.validate_plan(self.root, state.goal, plan, self.settings)
         state.approved_plan_id = None
         state.baseline_sha = None
         state.tasks = {task.id: TaskRuntime() for task in state.plan.tasks}
-        return CommandResult(True, True, f"Plan {state.plan.plan_id} is ready. Review it, then /approve {state.plan.plan_id}.", state.plan.model_dump())
+        return CommandResult(
+            True,
+            True,
+            f"Plan {state.plan.plan_id} is ready. Review it, then /approve {state.plan.plan_id}.",
+            state.plan.model_dump(),
+        )
 
     def _cmd_status(self, state: AgentState, args: list[str]) -> CommandResult:
         if args:
@@ -166,6 +227,9 @@ class AgentController:
             "tasks": {name: runtime.model_dump() for name, runtime in state.tasks.items()},
             "schedules": [schedule.model_dump() for schedule in state.schedules],
             "stopped_agents": state.stopped_agents,
+            "open_questions": [question.model_dump() for question in self._open_questions(state)],
+            "unacknowledged_notifications": sum(not item.acknowledged for item in state.notifications),
+            "expert_teams": sorted(self.teams),
         }
         return CommandResult(True, False, json.dumps(data, indent=2), data)
 
@@ -174,6 +238,7 @@ class AgentController:
             raise ValueError("usage: /approve <plan-id>")
         if state.goal is None or state.plan is None or args[0] != state.plan.plan_id:
             raise ValueError("plan ID is missing or stale; review the current /status")
+        self._require_no_open_questions(state)
         dirty = _git(self.root, "status", "--porcelain=v1").stdout.splitlines()
         if dirty:
             raise ValueError("controller worktree must be clean before plan approval")
@@ -181,12 +246,14 @@ class AgentController:
         if any(runtime.attempt for runtime in state.tasks.values()) and state.baseline_sha != current_head:
             raise ValueError("cannot move an approval baseline after task attempts exist; create and review a new plan")
         reviewed_plan_id = state.plan.plan_id
-        state.plan = agent_parser.validate_plan(self.root, state.goal, state.plan)
+        state.plan = agent_parser.validate_plan(self.root, state.goal, state.plan, self.settings)
         if state.plan.plan_id != reviewed_plan_id:
             raise ValueError("plan changed during approval revalidation; review the new plan digest")
         state.approved_plan_id = state.plan.plan_id
         state.baseline_sha = current_head
-        return CommandResult(True, True, f"Plan {state.plan.plan_id} approved at {state.baseline_sha}. Approval does not merge.")
+        return CommandResult(
+            True, True, f"Plan {state.plan.plan_id} approved at {state.baseline_sha}. Approval does not merge."
+        )
 
     def _cmd_ok(self, state: AgentState, args: list[str]) -> CommandResult:
         return self._cmd_approve(state, args)
@@ -219,7 +286,12 @@ class AgentController:
         *,
         require_dependencies: bool = True,
     ) -> tuple[PlanTask, TaskRuntime]:
-        if state.goal is None or state.plan is None or state.approved_plan_id != state.plan.plan_id or not state.baseline_sha:
+        if (
+            state.goal is None
+            or state.plan is None
+            or state.approved_plan_id != state.plan.plan_id
+            or not state.baseline_sha
+        ):
             raise ValueError("current plan is not approved")
         task = next((item for item in state.plan.tasks if item.id == task_id), None)
         if task is None:
@@ -234,6 +306,7 @@ class AgentController:
     def _cmd_start(self, state: AgentState, args: list[str]) -> CommandResult:
         if len(args) != 1:
             raise ValueError("usage: /start <task-id>")
+        self._require_no_open_questions(state)
         task, runtime = self._require_approved_task(state, args[0])
         if runtime.status == "in_progress":
             raise ValueError(f"task {task.id} already has an active worktree")
@@ -244,7 +317,9 @@ class AgentController:
         current_head = _git(self.root, "rev-parse", "HEAD").stdout.strip()
         dirty = _git(self.root, "status", "--porcelain=v1").stdout.splitlines()
         if current_head != state.baseline_sha or dirty:
-            raise ValueError("approval baseline is stale or the controller worktree is dirty; re-approve before new tasks")
+            raise ValueError(
+                "approval baseline is stale or the controller worktree is dirty; re-approve before new tasks"
+            )
         active = sum(item.status == "in_progress" for item in state.tasks.values())
         parallel_limit = int(self.settings["agents"]["maximum_parallel_workers"])
         if active >= parallel_limit:
@@ -258,7 +333,10 @@ class AgentController:
             raise ValueError("configured worktree directory must stay inside the repository")
         path = worktree_root / f"{state.goal.goal_id}-{task.id}-a{attempt}"
         branch = f"{self.settings['state']['branch_prefix']}{state.goal.goal_id}-{task.id}-a{attempt}"
-        if path.exists() or _git(self.root, "show-ref", "--verify", f"refs/heads/{branch}", check=False).returncode == 0:
+        if (
+            path.exists()
+            or _git(self.root, "show-ref", "--verify", f"refs/heads/{branch}", check=False).returncode == 0
+        ):
             raise ValueError("managed worktree path or branch already exists")
         path.parent.mkdir(parents=True, exist_ok=True)
         _git(self.root, "worktree", "add", "-b", branch, str(path), state.baseline_sha)
@@ -330,6 +408,13 @@ class AgentController:
         runtime.status = "verified" if report.ok else "failed"
         runtime.evidence.append(json.dumps(report.as_dict(), sort_keys=True)[:4000])
         state.last_report = report.as_dict()
+        if not report.ok:
+            self._emit(
+                state,
+                "error",
+                f"Task {task.id} verification failed",
+                f"Review policy report evidence for baseline {runtime.baseline_sha} before restore or retry.",
+            )
         label = "verified" if report.ok else "rejected"
         if report.report_only:
             label += " (security report only; no generated fix)"
@@ -346,7 +431,9 @@ class AgentController:
         _git(path, "reset", "--hard", runtime.baseline_sha)
         runtime.status = "restored"
         runtime.evidence.append(f"restored tracked files to {runtime.baseline_sha}; previous diff: {before[:1000]}")
-        return CommandResult(True, True, f"Task {args[0]} restored to {runtime.baseline_sha}. Untracked files were preserved.")
+        return CommandResult(
+            True, True, f"Task {args[0]} restored to {runtime.baseline_sha}. Untracked files were preserved."
+        )
 
     def _cmd_stop(self, state: AgentState, args: list[str]) -> CommandResult:
         if len(args) != 1 or not args[0].replace("-", "").isalnum():
@@ -362,7 +449,7 @@ class AgentController:
             raise ValueError('usage: /schedule "<five-field-cron>" -- /verify|/status')
         separator = args.index("--")
         cron = validate_cron(" ".join(args[:separator]))
-        command_tokens = [token.casefold() for token in args[separator + 1:]]
+        command_tokens = [token.casefold() for token in args[separator + 1 :]]
         if len(command_tokens) != 1 or command_tokens[0] not in self.settings["schedules"]["allowlisted_commands"]:
             raise ValueError("scheduled command is not allowlisted")
         if len(state.schedules) >= 20:

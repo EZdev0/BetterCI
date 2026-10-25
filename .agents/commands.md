@@ -15,6 +15,13 @@ Commands are ASCII, case-insensitive and parsed without shell evaluation. In Git
 | `/review standard|advanced` | Select review depth; advanced requires an approved plan. | State only |
 | `/restore <task-id>` | Reset a **managed worker worktree only** to its recorded baseline. | Worker worktree |
 | `/stop <agent-id>` | Mark a worker/reviewer stopped and reject further output from it. | State only |
+| `/ask <team> -- "<question>" [--ref <context>]` | Create a blocking human question and warning notification. | State only |
+| `/answer <question-id> -- "<answer>"` | Record an answer. It does not override policy, approve a plan or resume a provider automatically. | State only |
+| `/teams` | Show reviewed team managers, experts, responsibilities and write policy. | No |
+| `/brief <team> -- "<request>"` | Build a bounded subagent packet with manager, baseline, open questions and compacted untrusted context. It does not launch a provider. | No |
+| `/note <team> <kind> -- "<text>" --ref <evidence>` | Append one immutable timestamped note to ignored team-local knowledge. | Local state only |
+| `/context` | Show bounded shared context plus omitted-record count and SHA-256 digest. | No |
+| `/notifications [all|open]` / `/ack <notification-id>` | Inspect or acknowledge durable local notices, warnings and errors. | State only |
 | `/schedule <five-field-cron> -- <safe-operation>` | Validate a future orchestration proposal for `/verify` or `/status`. It does not invoke the local task command or edit workflow YAML. | State only |
 
-Unknown options, missing acceptance criteria, missing references, unsafe paths, arbitrary schedule commands and stale plan IDs fail closed. `/approve` never means merge. GitHub scheduled workflows run from the latest default-branch commit, can be delayed or dropped under load, use UTC by default, have a five-minute minimum interval, and public-repository schedules disable after 60 days without activity; see `RESEARCH.md`.
+Unknown options, missing acceptance criteria, missing references, hidden/unsafe paths, risky instruction overrides, arbitrary schedule commands, open blocking questions and stale plan IDs fail closed. `/approve` never means merge. GitHub scheduled workflows run from the latest default-branch commit, can be delayed or dropped under load, use UTC by default, have a five-minute minimum interval, and public-repository schedules disable after 60 days without activity; see `RESEARCH.md`.

@@ -22,6 +22,32 @@ approval:
     - /ok
   plan_digest: sha256
 
+scope:
+  # Hidden paths are omitted from planner/reviewer context and cannot be changed
+  # by managed workers. Patterns are repository-relative and case-sensitive.
+  ignored_directories:
+    - .git
+    - .vibeci
+    - .agents/local
+    - node_modules
+    - vendor
+  ignored_extensions:
+    - .eng
+    - .gguf
+    - .log
+  allowed_path_globs:
+    - "*"
+  denied_path_globs:
+    - ".git"
+    - ".git/*"
+    - ".vibeci"
+    - ".vibeci/*"
+    - ".agents/local"
+    - ".agents/local/*"
+    - "*.pem"
+    - "*.key"
+    - "*.p12"
+
 changes:
   forbid_file_deletion: true
   forbid_renames: true
@@ -34,16 +60,19 @@ changes:
   protected_paths:
     - .git
     - .github/workflows
-    - .agents/settings.yml
+    - .agents
+    - AGENTS.md
     - requirements.lock
     - requirements-dev.lock
     - tools.lock.json
+  # Descriptive categories mirrored by reviewed code; these are not executable regex settings.
   report_only_risk_patterns:
     - "curl ... | shell"
     - "wget ... | shell"
     - "dynamic eval/exec"
     - "credential or token exfiltration"
     - "recursive destructive delete"
+    - "world-writable permissions"
     - "workflow secret exposure"
 
 agents:
@@ -57,6 +86,40 @@ agents:
     - budget_exhausted
     - policy_violation
     - repeated_unsupported_claim
+
+orchestration:
+  teams_file: .agents/bigbrain/teams.yml
+  knowledge_directory: .vibeci/bigbrain
+  require_manager: true
+  block_workers_on_open_questions: true
+  maximum_open_questions: 20
+  maximum_note_chars: 2000
+
+context:
+  maximum_brief_chars: 12000
+  maximum_note_entries: 40
+  preserve_note_kinds:
+    - warning
+    - decision
+
+notifications:
+  github_annotations: true
+  maximum_records: 200
+  external_delivery_enabled: false
+  reason: External notification adapters require an explicit endpoint, authentication policy and integration test.
+
+research:
+  enabled: false
+  provider: searxng
+  searxng_url: ""
+  timeout_seconds: 15
+  maximum_response_bytes: 500000
+  maximum_results: 10
+  allow_loopback: true
+  fetch_allowed_hosts:
+    - github.com
+    - api.github.com
+    - docs.github.com
 
 verification:
   timeout_seconds_per_command: 180

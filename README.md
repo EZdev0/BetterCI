@@ -60,6 +60,8 @@ Fork PRs: GitHub gives `pull_request` runs a read-only token, so suggestions app
 | `fail-on` | `none` | `error` fails the job on unfixed error-level findings |
 | `post-review` | `true` | post suggestions as a PR review (same-repo PRs only) |
 
+The review bot does **not** need all repository permissions. Same-repository posting needs only `contents: read` (checkout) and `pull-requests: write`; fork PRs intentionally remain read-only. A missing token or HTTP 403/404 now fails the posting step with GitHub's [official `GITHUB_TOKEN` permissions guide](https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#modifying-the-permissions-for-the-github_token) instead of reporting false success.
+
 ## Goal-driven agent control (local, advanced)
 
 Every agent must read `AGENTS.md` and `.agents/` first. Mutable state and worktrees stay in ignored `.vibeci/`; policy remains version-controlled.
@@ -79,9 +81,33 @@ python -m vibeci agent --text "/start <task-id>"
 python -m vibeci agent --text "/verify <task-id>"
 # On failure, restore tracked files in that managed worktree only:
 python -m vibeci agent --text "/restore <task-id>"
+
+# Inspect managers, record a blocking question, and build (but do not launch) a subagent brief:
+python -m vibeci agent --text "/teams"
+python -m vibeci agent --text "/ask security -- 'Is this credential flow intentional?' --ref app.py"
+python -m vibeci agent --text "/brief security -- 'Review the approved diff'"
+
+# Append a timestamped, evidence-linked local note and inspect bounded shared context:
+python -m vibeci agent --text "/note research evidence -- 'JSON output requires instance configuration' --ref RESEARCH.md"
+python -m vibeci agent --text "/context"
 ```
 
+The committed `.agents/bigbrain/` map has one manager per expert team. Mutable notes are immutable per-record files under ignored `.vibeci/bigbrain/`, so teams do not overwrite a shared document. Context is bounded by character/entry budgets; omitted records remain on disk and are represented by a count and SHA-256 digest. Request triage pauses instruction overrides, destructive operations, credential exposure, malware construction and security-bypass requests. A human `/answer` does not bypass policy or approve work.
+
+Scope settings hide configured directories/extensions (including `.eng`) from planner context and reject managed changes to ignored/denied paths. `allowed_path_globs`, `denied_path_globs`, protected paths, verification argv lists, team limits and notification limits are reviewed in `.agents/settings.yml`.
+
 `/approve` never means merge. `/schedule` records only a validated `/verify` or `/status` proposal; it never silently creates workflow YAML. Standard PR findings remain visible through annotations, reviews, summaries and JSON artifacts. A stateful `issue_comment` executor is deliberately not shipped until durable state, role authorization, low-trust cache handling and ephemeral-runner recovery are solved; see `FUTURE.md`.
+
+### Optional tokenless web research
+
+BetterCI includes a real but **disabled-by-default** SearXNG JSON client and a separate direct text fetcher. It does not choose an unknown public instance, scrape search HTML or claim that a public service is reliable/free forever. Configure a reviewed self-hosted/controlled `research.searxng_url`, enable `research.enabled`, and keep a narrow `fetch_allowed_hosts` list. Requests have time, byte and result caps, reject credential-like query text/parameters, never send an authorization header, do not follow redirects, and return untrusted evidence.
+
+```bash
+python -m vibeci web-search --query "site:github.com/example official docs"
+python -m vibeci web-fetch --url "https://github.com/example/project"
+```
+
+SearXNG must enable its JSON format; many public instances do not. See the dated official-source entries in `RESEARCH.md`. Search/fetch output still requires primary-source verification and is never trusted as a command.
 
 ## Language matrix
 | language | scanners | patch gate |
@@ -118,8 +144,8 @@ The smoke harness records schema/gate/semantic pass results and latency; it expl
 ## Comparison (capabilities, not speed)
 | | VibeCI | hosted SAST/AI reviewers |
 |---|---|---|
-| Needs API key / external service | no | usually yes |
-| Code leaves the runner | no (loopback only) | usually yes |
+| Default scan needs API key / external service | no | usually yes |
+| Code leaves the runner | no for scan/model; opt-in research sends its query/URL to configured hosts | usually yes |
 | Native `suggestion` blocks | yes | varies |
 | Model output validated by compiler/linter | yes | varies |
 
@@ -127,10 +153,10 @@ The smoke harness records schema/gate/semantic pass results and latency; it expl
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install --require-hashes --no-deps -r requirements.lock -r requirements-dev.lock
-PYTHONPATH=. .venv/bin/python -m pytest -q tests
+PATH="$PWD/.venv/bin:$PATH" PYTHONPATH=. .venv/bin/python -m pytest -q tests
 ```
 
-The old command (`pip install --require-hashes --no-deps -r requirements.lock pytest`) was broken: in hash-checking mode **every** requirement needs a hash, so an un-hashed `pytest` made pip exit 1. Test dependencies now live in their own hash-locked file. Regenerate it with the command recorded at the top of `requirements-dev.lock`.
+The old install command (`pip install --require-hashes --no-deps -r requirements.lock pytest`) was broken: in hash-checking mode **every** requirement needs a hash, so an un-hashed `pytest` made pip exit 1. Test dependencies now live in their own hash-locked file. The test command also prepends `.venv/bin` because selecting the venv Python alone does not expose Ruff/Vulture/Radon to child-process discovery. Regenerate the development lock with the command recorded at the top of `requirements-dev.lock`.
 
 Run the same checks as CI locally:
 
@@ -139,5 +165,5 @@ Run the same checks as CI locally:
 .venv/bin/shellcheck scripts/*.sh
 .venv/bin/zizmor --offline --no-progress --strict-collection --collect=all --format plain \
   .github/workflows .github/dependabot.yml action.yml
-PYTHONPATH=. .venv/bin/python -m pytest -q tests
+PATH="$PWD/.venv/bin:$PATH" PYTHONPATH=. .venv/bin/python -m pytest -q tests
 ```
