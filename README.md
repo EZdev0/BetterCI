@@ -96,7 +96,22 @@ The committed `.agents/bigbrain/` map has one manager per expert team. Mutable n
 
 Scope settings hide configured directories/extensions (including `.eng`) from planner context and reject managed changes to ignored/denied paths. `allowed_path_globs`, `denied_path_globs`, protected paths, verification argv lists, team limits and notification limits are reviewed in `.agents/settings.yml`.
 
-`/approve` never means merge. `/schedule` records only a validated `/verify` or `/status` proposal; it never silently creates workflow YAML. Standard PR findings remain visible through annotations, reviews, summaries and JSON artifacts. A stateful `issue_comment` executor is deliberately not shipped until durable state, role authorization, low-trust cache handling and ephemeral-runner recovery are solved; see `FUTURE.md`.
+`/approve` never means merge. `/schedule` records only a validated `/verify` or `/status` proposal; it never silently creates workflow YAML. Standard PR findings remain visible through annotations, reviews, summaries and JSON artifacts. Stateful comment execution remains deliberately unshipped until durable state, stronger authorization, low-trust cache handling and ephemeral-runner recovery are solved; see `FUTURE.md`.
+
+### GitHub PR comment diagnostics
+
+The repository ships a separate **read-only** command surface for GitHub PR conversations. It uses ordinary GitHub-hosted Actions runners and requires no local or self-hosted runner. The workflow must first be merged onto the default branch because GitHub dispatches `issue_comment` only when that workflow exists there.
+
+| Command | Result |
+|---|---|
+| `/help` or `/vibeci help` | Command list, permissions and scope. `/Help` and other casing work too. |
+| `/ci` | Current-head workflow and job status, including assigned runner/group/labels and failed steps. |
+| `/runs` | Up to five recent runs for the PR's exact current head SHA. |
+| `/run <run-id>` | Detailed jobs for one run, rejected if it belongs to another SHA. |
+| `/runners` | Runners actually assigned to current-head jobs; no admin-only runner inventory. |
+| `/failures` | Failed, cancelled or timed-out jobs and failed step names with GitHub links. |
+
+Only repository `OWNER`, `MEMBER`, and `COLLABORATOR` comments are handled. Responses are bounded to five current-head runs, 50 latest-attempt jobs per run, and a 24,000-character comment budget; larger matrices stay available through the linked GitHub run. The adapter executes default-branch code, never checks out or runs contributor code, never reads job logs, installs no dependencies, uses no cache, and cannot rerun/cancel jobs. Its token is limited to `actions: read`, `contents: read`, `pull-requests: read`, and `issues: write` so it can read diagnostics and post one bounded response. Comment text is parsed from the event JSON as data and never becomes shell input.
 
 ### Optional tokenless web research
 
@@ -122,6 +137,8 @@ SearXNG must enable its JSON format; many public instances do not. See the dated
 
 * **tests** – Python 3.11/3.12/3.13 matrix. Installs `requirements.lock` + `requirements-dev.lock` with `--require-hashes --no-deps`, runs `pip check`, byte-compiles all modules, runs the full pytest suite (unit tests, mock-llama-server e2e for both transports and advanced reviewers, agent/worktree/policy tests, regression tests, repository-integrity tests), then dogfoods `python -m vibeci scan --no-llm --fail-on error` on its own commit.
 * **lint** – Ruff with the explicit rule set in `pyproject.toml`, `bash -n` + ShellCheck on `scripts/*.sh`, zizmor with `--strict-collection` over workflows/`action.yml`/`dependabot.yml`, and actionlint v1.7.12 (release tarball verified against its upstream SHA-256) for workflow syntax and expression types.
+
+`.github/workflows/vibeci-commands.yml` is independent from CI execution. After it is present on the default branch, trusted PR comments can query existing run/job/runner/failure metadata; the workflow cannot start, rerun, cancel, approve, or merge anything.
 
 All `uses:` references are pinned to full commit SHAs and the jobs pin the `ubuntu-24.04` runner label instead of the moving `ubuntu-latest` (GitHub started migrating that label to Ubuntu 26 in October 2026). The workflow starts from `permissions: {}`, grants `contents: read` per job, uses `persist-credentials: false`, sets job timeouts and a concurrency group. `.github/dependabot.yml` proposes pin updates weekly with a 7-day cooldown. The integrity tests fail if a future edit adds an unpinned action, a dangerous trigger, an expression inside a `run:` block, an unhash-locked requirement, or a stale JSON schema.
 

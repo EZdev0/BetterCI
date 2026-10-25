@@ -22,11 +22,12 @@ This file separates shipped behavior from planned work. A checkbox is completed 
 - [x] Pinned 3B fast candidate in addition to the 7B default.
 - [x] Review-post permission failures produce failing GitHub annotations and link the official least-privilege token guide.
 - [x] Disabled-by-default tokenless SearXNG JSON search and allowlisted direct text fetch with strict URL/time/byte/result/no-redirect controls.
+- [x] Least-privilege, read-only GitHub PR comment diagnostics for help, current CI, runs, assigned runners and failed steps. The adapter executes default-branch code only, checks repository role twice and never checks out contributor code.
 
-## Next — required before autonomous execution from GitHub comments
+## Next — required before stateful or autonomous execution from GitHub comments
 
 - [ ] Persist signed/validated agent state for PR and issue comments without trusting user-edited comments.
-- [ ] Add a least-privilege `/vibeci` `issue_comment` workflow that runs default-branch code only, validates repository role in code and workflow, never checks out or executes the contributor ref, and uses read-only cache mode.
+- [ ] Add a stateful `/vibeci` command adapter only after it can preserve approval/worktree/recovery semantics across ephemeral GitHub-hosted jobs. The shipped comment adapter is diagnostics-only.
 - [ ] Convert an approved plan into linked Linear/GitHub tasks idempotently.
 - [ ] Add durable worker execution. GitHub-hosted runners are ephemeral; worktrees cannot survive between separate jobs without a deliberate artifact/ref protocol.
 - [ ] Add judge-controlled candidate integration by cherry-picking verified task commits into a new integration branch. Never auto-merge the PR.

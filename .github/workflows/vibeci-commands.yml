@@ -1,0 +1,46 @@
+name: VibeCI read-only commands
+
+on:
+  issue_comment:
+    types: [created]
+
+# The command adapter can read CI metadata and post one issue/PR conversation
+# response. It cannot rerun, cancel, approve, merge, or write repository data.
+permissions: {}
+
+concurrency:
+  group: vibeci-command-${{ github.event.issue.number }}-${{ github.event.comment.id }}
+  cancel-in-progress: false
+
+jobs:
+  diagnostics:
+    name: read-only PR CI diagnostics
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      # issue_comment resolves to default-branch code. Pin the ref explicitly so
+      # no contributor branch, merge ref, artifact, dependency, or cache runs
+      # with the comment-posting token.
+      - name: Checkout reviewed default-branch command code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Read CI metadata and post bounded diagnostics
+        env:
+          GITHUB_API_URL: https://api.github.com
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -m vibeci.github_commands
