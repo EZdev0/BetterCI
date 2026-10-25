@@ -52,9 +52,9 @@ _HELP = """VibeCI agent commands:
 
 Planning is read-only. Writes require an approved plan and an isolated managed worktree. Open questions pause workers. /brief never launches a provider, and /approve never merges.
 
-GitHub PR comments use a separate diagnostics-only adapter after its workflow is on the default branch:
+Policy-authorized GitHub issue/PR comments use a separate diagnostics-only adapter after its workflow is on the default branch:
 /help | /ci | /runs | /run <run-id> | /runners | /failures
-These commands show Actions status, assigned GitHub-hosted runners and failing steps; they cannot execute, rerun, cancel, approve or merge."""
+Data commands optionally accept --target default|pr:<number>. They show target-bound Actions status, assigned runners and failing steps; they cannot execute, rerun, cancel, approve or merge."""
 
 
 class StateStore:

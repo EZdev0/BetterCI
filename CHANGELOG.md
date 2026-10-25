@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
-## [Unreleased] — 2026-10-25
+## [Unreleased] — 2026-10-26
 
 ### Added
 
@@ -10,7 +10,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - `.github/dependabot.yml` for weekly action-pin updates with a 7-day cooldown.
 - `requirements-dev.in` / `requirements-dev.lock`: hash-locked pytest dependencies.
 - `pyproject.toml` with an explicit Ruff rule set, so lint results do not depend on Ruff's changing defaults.
-- Regression, repository-integrity, agent/parser/worktree, Big Brain/context/research, advanced-review and GitHub comment-diagnostic coverage (87 tests total).
+- Regression, repository-integrity, agent/parser/worktree, Big Brain/context/research, advanced-review and GitHub comment-diagnostic coverage (95 tests total).
 - `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md` and `.gitignore`.
 - English-only documentation; `docs/RESEARCH.md` translated from German.
 - Error tracking in Linear (team `PRO`, project "BetterCI (VibeCI) - CI Hardening & Error Tracking"), mirrored in `docs/ERRORS.md`. Every error records how it happened, its root cause, the solution path and the regression test.
@@ -41,11 +41,13 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - Missing/insufficient GitHub review-post permissions could still exit successfully; posting now fails visibly with least-privilege guidance and the official help URL.
 - Documented pytest commands invoked the venv interpreter without putting venv tools on `PATH`, causing subprocess-based scanner tests to skip/fail; local commands now expose the hash-locked tool directory.
 - `/help` and `/Help` in GitHub PR comments had no effect because only the local parser existed while documentation implied a GitHub surface; a read-only, role-gated comment adapter now returns help and CI/runner/failure diagnostics.
+- Trusted commands in normal GitHub issues always produced a skipped job because both the workflow and Python handler required a pull-request marker. Policy-listed control issues now use the exact default-branch event SHA, while safe `default`/same-repository-PR target selection and command-workflow filtering preserve bounded, relevant CI results.
 
 ### Changed
 
 - All documentation is now English; the README example uses a real commit SHA instead of a placeholder and no longer claims a non-existent benchmark workflow.
 - CI jobs pin `ubuntu-24.04` because GitHub started migrating `ubuntu-latest` to Ubuntu 26 in October 2026.
+- Read-only comment authorization now combines the existing repository-role gate with a strict secret-backed login/user-ID/control-issue policy. The workflow checks out the exact default-branch event SHA, exposes the policy only to Python, rejects reruns and never uses a selected PR as executable code.
 
 ## [0.1.0] — 2026-10-13
 

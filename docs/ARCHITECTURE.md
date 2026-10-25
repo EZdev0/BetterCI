@@ -114,21 +114,27 @@ A GBNF/JSON-schema grammar guarantees syntax only. It cannot stop a model from p
 
 Standard scans expose findings through PR annotations, reviews, the job summary and the `vibeci-review` JSON artifact. Same-repository review posting requires only `contents: read` plus `pull-requests: write`; missing/insufficient access returns a failing Action annotation with GitHub's official token-permission URL instead of silently succeeding. Fork PR scans intentionally stay read-only.
 
-GitHub PR comments have a separate diagnostics-only path:
+Policy-authorized issue and PR comments have a separate diagnostics-only path:
 
 ```text
-trusted PR comment (`OWNER`/`MEMBER`/`COLLABORATOR`)
-    -> issue_comment workflow from the default branch
-    -> independent event/role/grammar validation
-    -> GET pull request current head SHA
-    -> GET bounded Actions runs + jobs for that exact SHA
-    -> render escaped help/status/runner/failing-step metadata
-    -> POST one bounded issue comment
+slash comment + trusted repository association
+    -> issue_comment workflow, first attempt only, exact default-branch event SHA
+    -> checkout that trusted SHA (never contributor code)
+    -> parse bounded secret policy without logging it
+    -> exact event actor == comment login + immutable user ID allowlist check
+    -> normal issue must be a policy-listed control issue
+    -> auto target: conversation PR head, otherwise default-branch event SHA
+       optional target: default or positive same-repository PR number only
+    -> GET at most 50 candidate runs; exclude this command workflow; report five
+    -> GET at most 50 latest-attempt jobs per selected run
+    -> render escaped status/runner/failing-step metadata; POST one bounded comment
 ```
 
-`vibeci.github_commands` accepts case-insensitive `/help`, `/ci`, `/runs`, `/run <id>`, `/runners`, and `/failures`, with or without `/vibeci`. The workflow checks actor association before checkout and Python checks it again. It explicitly checks out the repository default branch, never the contributor ref, installs no dependency, restores/writes no cache and receives no repository secret. Its `GITHUB_TOKEN` has only `actions: read`, `contents: read`, `pull-requests: read`, and `issues: write`; it cannot rerun, cancel, approve or merge. Output includes assigned job runner names/groups/labels and failed step names, but never potentially sensitive job-log text. A requested run ID must match the PR's current head SHA.
+`vibeci.github_policy` owns the fail-closed JSON policy, case-insensitive grammar, event authorization and exact target resolution. `vibeci.github_commands` renders and posts `/help`, `/ci`, `/runs`, `/run <id>`, `/runners`, and `/failures`; data commands accept only `--target default` or `--target pr:<positive-number>`. The public workflow condition checks `OWNER`, `MEMBER`, or `COLLABORATOR` before runner allocation. GitHub does not allow secrets directly in a job-level `if`, so Python independently repeats the association check and requires an exact login/user-ID pair from `VIBECI_COMMAND_POLICY_JSON` before any metadata request. Missing, malformed, duplicate or oversized policy fails without revealing its content; unauthorized actors and unlisted normal issues are silent no-ops.
 
-The repository deliberately does not request administration access for a full self-hosted-runner inventory. `/runners` reports only runner assignments exposed by current-head workflow jobs. The command workflow becomes active only after it exists on the default branch, matching GitHub's `issue_comment` dispatch rules.
+The workflow pins checkout to `${{ github.sha }}`, which is the trusted default-branch SHA for `issue_comment`; it never checks out a selected PR or arbitrary ref, installs no dependency, restores/writes no cache and exposes the policy secret only to the Python step. Its `GITHUB_TOKEN` has only `actions: read`, `contents: read`, `pull-requests: read`, and `issues: write`; it cannot start, rerun, cancel, approve or merge. A requested run ID must match the exact resolved target SHA and cannot identify the command workflow itself. Output includes assigned job runner names/groups/labels and failed step names, never job-log text.
+
+The repository deliberately does not request administration access for a full self-hosted-runner inventory. `/runners` reports only target-bound workflow-job assignments. The command workflow becomes active only after it exists on the default branch, and normal issue handling additionally requires an administrator-configured policy secret.
 
 Stateful slash commands remain local. GitHub-hosted runners are ephemeral, so comments cannot invoke goal/plan/approval/worktree operations until durable tamper-evident state and restoration have a tested design. `/schedule` likewise validates and records only a proposal for `/verify` or `/status`; it never writes workflow YAML. GitHub schedules use the latest default-branch commit, may be delayed or dropped, and are not a persistent exact-time daemon. Exact limits and the accessed official URLs are in `RESEARCH.md`.
 

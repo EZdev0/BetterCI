@@ -4,8 +4,8 @@ on:
   issue_comment:
     types: [created]
 
-# The command adapter can read CI metadata and post one issue/PR conversation
-# response. It cannot rerun, cancel, approve, merge, or write repository data.
+# The command adapter can read CI metadata and post one policy-authorized
+# issue/PR response. It cannot rerun, cancel, approve, merge, or write code.
 permissions: {}
 
 concurrency:
@@ -14,9 +14,9 @@ concurrency:
 
 jobs:
   diagnostics:
-    name: read-only PR CI diagnostics
+    name: read-only issue/PR CI diagnostics
     if: >-
-      github.event.issue.pull_request &&
+      github.run_attempt == 1 &&
       startsWith(github.event.comment.body, '/') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-24.04
@@ -27,13 +27,13 @@ jobs:
       issues: write
       pull-requests: read
     steps:
-      # issue_comment resolves to default-branch code. Pin the ref explicitly so
+      # issue_comment resolves to the default-branch SHA. Pin that exact SHA so
       # no contributor branch, merge ref, artifact, dependency, or cache runs
       # with the comment-posting token.
       - name: Checkout reviewed default-branch command code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -43,4 +43,7 @@ jobs:
           GITHUB_EVENT_PATH: ${{ github.event_path }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_TOKEN: ${{ github.token }}
+          VIBECI_ACTOR: ${{ github.actor }}
+          VIBECI_COMMAND_POLICY_JSON: ${{ secrets.VIBECI_COMMAND_POLICY_JSON }}
+          VIBECI_DEFAULT_SHA: ${{ github.sha }}
         run: python3 -m vibeci.github_commands

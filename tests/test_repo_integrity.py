@@ -93,13 +93,14 @@ def test_comment_workflow_is_read_only_and_default_branch_only():
     job = workflow["jobs"]["diagnostics"]
     condition = job["if"]
     for required in (
-        "github.event.issue.pull_request",
+        "github.run_attempt == 1",
         "github.event.comment.author_association",
         "OWNER",
         "MEMBER",
         "COLLABORATOR",
     ):
         assert required in condition
+    assert "github.event.issue.pull_request" not in condition
     assert job["permissions"] == {
         "actions": "read",
         "contents": "read",
@@ -113,12 +114,13 @@ def test_comment_workflow_is_read_only_and_default_branch_only():
     assert "pull_request_target" not in text
     assert "workflow_run" not in text
     assert "actions/cache" not in text
-    assert "secrets." not in text
+    assert text.count("secrets.") == 1
+    assert "${{ secrets.VIBECI_COMMAND_POLICY_JSON }}" in text
     assert "github.event.pull_request.head" not in text
 
     checkout = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@"))
     assert checkout["with"] == {
-        "ref": "${{ github.event.repository.default_branch }}",
+        "ref": "${{ github.sha }}",
         "fetch-depth": 1,
         "persist-credentials": False,
     }
@@ -129,6 +131,9 @@ def test_comment_workflow_is_read_only_and_default_branch_only():
         "GITHUB_EVENT_PATH": "${{ github.event_path }}",
         "GITHUB_REPOSITORY": "${{ github.repository }}",
         "GITHUB_TOKEN": "${{ github.token }}",
+        "VIBECI_ACTOR": "${{ github.actor }}",
+        "VIBECI_COMMAND_POLICY_JSON": "${{ secrets.VIBECI_COMMAND_POLICY_JSON }}",
+        "VIBECI_DEFAULT_SHA": "${{ github.sha }}",
     }
 
 
