@@ -13,6 +13,8 @@ from pathlib import Path
 import yaml
 
 from vibeci.models import fix_schema
+from vibeci.policy import documentation_language_issue
+from vibeci.settings import load_settings
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = sorted((ROOT / ".github/workflows").glob("*.y*ml"))
@@ -100,7 +102,8 @@ def test_readme_documents_all_action_inputs():
 
 def test_all_repo_yaml_and_json_parse():
     paths = [ROOT / "action.yml", ROOT / "tools.lock.json", ROOT / "schemas/fix.schema.json",
-             ROOT / ".github/dependabot.yml", ROOT / "grammars/fix.gbnf", *WORKFLOWS]
+             ROOT / ".github/dependabot.yml", ROOT / ".agents/settings.yml",
+             ROOT / "grammars/fix.gbnf", *WORKFLOWS]
     for path in paths:
         if path.suffix == ".json":
             json.loads(path.read_text(encoding="utf-8"))
@@ -108,3 +111,47 @@ def test_all_repo_yaml_and_json_parse():
             assert isinstance(_load(path), dict), path
         else:
             assert path.read_text(encoding="utf-8").strip(), path
+
+
+def test_agent_policy_is_tracked_but_runtime_state_is_ignored():
+    settings = load_settings(ROOT / ".agents/settings.yml")
+    assert settings["approval"]["required_before_writes"] is True
+    assert settings["changes"]["forbid_file_deletion"] is True
+    assert settings["agents"]["minimum_advanced_approvals"] >= 2
+    assert ".eng" in settings["scope"]["ignored_extensions"]
+    assert settings["orchestration"]["require_manager"] is True
+    assert settings["research"]["enabled"] is False
+    assert all(not spec["enabled"] for name, spec in settings["providers"].items() if name != "local")
+    ignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert ".vibeci/" in ignore and ".agents/local/" in ignore and ".vibeci-worktree.json" in ignore
+    entry = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    for required in (".agents/README.md", ".agents/settings.yml", "RESEARCH.md"):
+        assert required in entry
+
+
+def test_documented_test_command_exposes_venv_tools_to_subprocesses():
+    required = 'PATH="$PWD/.venv/bin:$PATH" PYTHONPATH=. .venv/bin/python -m pytest -q tests'
+    for path in (ROOT / "README.md", ROOT / "CONTRIBUTING.md"):
+        text = path.read_text(encoding="utf-8")
+        assert required in text, path
+        assert "\nPYTHONPATH=. .venv/bin/python -m pytest" not in text, path
+
+
+def test_every_bigbrain_team_has_a_manager_and_first_read_contract():
+    teams = _load(ROOT / ".agents/bigbrain/teams.yml")["teams"]
+    team_directories = {path.parent.name for path in (ROOT / ".agents/bigbrain/teams").glob("*/README.md")}
+    assert team_directories == set(teams)
+    managers = []
+    for team_id, definition in teams.items():
+        managers.append(definition["manager"])
+        text = (ROOT / f".agents/bigbrain/teams/{team_id}/README.md").read_text(encoding="utf-8")
+        assert f"`{definition['manager']}`" in text
+        assert "AGENTS.md" in text
+    assert len(managers) == len(set(managers))
+
+
+def test_repository_docs_are_english_and_forbidden_product_reference_is_absent():
+    for path in [*ROOT.glob("*.md"), *(ROOT / "docs").glob("*.md"), *(ROOT / ".agents").rglob("*.md")]:
+        text = path.read_text(encoding="utf-8")
+        assert documentation_language_issue(text) is None, path
+        assert ("ver" + "cel") not in text.casefold(), path

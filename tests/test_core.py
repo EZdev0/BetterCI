@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -152,3 +153,89 @@ def test_no_llm_mode_is_deterministic(repo):
     cli.main(["scan", "--base", "HEAD~1", "--no-llm", "--out", "out"])
     sugs = _suggestions()
     assert sugs and all(s["source"] == "tool" for s in sugs)
+
+
+def test_advanced_mode_requires_two_schema_valid_verifier_role_passes(repo):
+    srv, url = mock_llm.start()
+    mock_llm.REPLY["value"] = {
+        "propose_fix": GOOD,
+        "verify_patch": {
+            "verdict": "approve",
+            "goal_satisfied": True,
+            "behavior_preserved": True,
+            "finding_resolved": True,
+            "new_risk": "none",
+            "reason": "The context manager closes the file on every exit path.",
+            "evidence": ["ruff/SIM115", "app.py:6-7"],
+        },
+    }
+    rc = cli.main([
+        "scan", "--base", "HEAD~1", "--llm-url", url, "--review-mode", "advanced", "--out", "out",
+    ])
+    assert rc == 0
+    suggestion = next(item for item in _suggestions() if item["source"] == "llm")
+    assert "2/2" in suggestion["reviewer_summary"]
+    verifier_calls = [body for path, body in mock_llm.SEEN
+                      if path == "/v1/messages" and body.get("tool_choice", {}).get("name") == "verify_patch"]
+    assert len(verifier_calls) >= 2
+    srv.shutdown()
+
+
+def test_advanced_mode_drops_patch_when_verifier_rejects(repo):
+    srv, url = mock_llm.start()
+    mock_llm.REPLY["value"] = {
+        "propose_fix": GOOD,
+        "verify_patch": {
+            "verdict": "reject",
+            "goal_satisfied": False,
+            "behavior_preserved": False,
+            "finding_resolved": True,
+            "new_risk": "unknown",
+            "reason": "Behavior preservation is not supported by the shown evidence.",
+            "evidence": ["app.py:6-7"],
+        },
+    }
+    cli.main(["scan", "--base", "HEAD~1", "--llm-url", url, "--review-mode", "advanced", "--out", "out"])
+    assert not any(item["source"] == "llm" for item in _suggestions())
+    srv.shutdown()
+
+
+def test_post_reports_missing_or_insufficient_github_permission_with_help_link(tmp_path, monkeypatch, capsys):
+    out = tmp_path / "out"
+    out.mkdir()
+    suggestion = Suggestion(
+        path="app.py",
+        start_line=1,
+        end_line=1,
+        replacement="value = 2",
+        title="Update value",
+        detail="Deterministic test suggestion.",
+        source="tool",
+        rule="TEST",
+    )
+    (out / "review.json").write_text(
+        json.dumps({"suggestions": [suggestion.model_dump()]}),
+        encoding="utf-8",
+    )
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({
+        "pull_request": {
+            "number": 7,
+            "head": {"sha": "a" * 40, "repo": {"full_name": "owner/repo"}},
+        }
+    }), encoding="utf-8")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event))
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    assert cli.cmd_post(SimpleNamespace(out=str(out))) == 2
+    output = capsys.readouterr().out
+    assert "pull-requests: write" in output
+    assert "automatic-token-authentication" in output
+
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setattr(cli, "post_review", lambda *_args: "no write access (fork PR or missing permission): HTTP 403")
+    assert cli.cmd_post(SimpleNamespace(out=str(out))) == 2
+    output = capsys.readouterr().out
+    assert "do not grant all permissions" in output
+    assert "HTTP 403" in output

@@ -1,5 +1,7 @@
 # 90-day roadmap (realistic version)
 
+> [`FUTURE.md`](../FUTURE.md) is the current capability/status ledger for the agent-control work. This older 90-day adoption roadmap remains for product context.
+
 100k stars is an outlier outcome, not a plan. Plan for trust first: a small number of repos that keep VibeCI enabled.
 
 **Days 1-14 - make it real.** Measure cold + cached with the commands in `README.md` (there is no benchmark workflow yet), fill the README table with measured numbers. Run `vibeci doctor` on a real llama-server. Fix what breaks. Tag v0.1.0 with a commit-pinned example.

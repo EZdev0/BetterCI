@@ -1,4 +1,6 @@
-# Research Dossier (snapshot: 2026-10-13)
+# Research Dossier (historical snapshot: 2026-10-13)
+
+> Current dated source access and agent-system research now live in the root [`RESEARCH.md`](../RESEARCH.md). This historical audit is preserved for traceability and is not the current model/provider decision record.
 
 Confidence labels: **[VERIFIED]** checked directly (binary, tests, lockfiles) · **[LIKELY]** multiple sources, not measured by us · **[UNCERTAIN]** single source or inference.
 

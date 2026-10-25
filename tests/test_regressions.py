@@ -77,6 +77,18 @@ def test_gate_allows_removing_python_findings():
     assert gate.check_patched("a.py", "import os\nx = 1\n", "x = 1\n").ok
 
 
+def test_gate_rejects_file_truncation_and_suspicious_generated_code():
+    original = "".join(f"value_{number} = {number}\n" for number in range(100))
+    assert not gate.check_patched("a.py", original, "value_0 = 0\n").ok
+    same_length_rewrite = "".join(
+        f"replacement_{number} = {number}\n" if number < 81 else f"value_{number} = {number}\n"
+        for number in range(100)
+    )
+    assert not gate.check_patched("a.py", original, same_length_rewrite).ok
+    result = gate.check_patched("a.py", "value = user_input\n", "value = eval(user_input)\n")
+    assert not result.ok and "security report only" in result.reason
+
+
 @pytest.mark.skipif(shutil.which("shellcheck") is None, reason="shellcheck not installed")
 def test_gate_rejects_new_shellcheck_finding():
     result = gate.check_patched("a.sh", 'echo "$HOME"\n', "echo $HOME\n")
