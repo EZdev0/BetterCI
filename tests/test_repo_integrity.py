@@ -83,6 +83,55 @@ def test_workflows_are_least_privilege_bounded_and_injection_safe():
                     assert step.get("with", {}).get("persist-credentials") is False, (path.name, job_name)
 
 
+def test_comment_workflow_is_read_only_and_default_branch_only():
+    path = ROOT / ".github/workflows/vibeci-commands.yml"
+    workflow = _load(path)
+    triggers = workflow.get("on", workflow.get(True))
+    assert triggers == {"issue_comment": {"types": ["created"]}}
+    assert workflow["permissions"] == {}
+
+    job = workflow["jobs"]["diagnostics"]
+    condition = job["if"]
+    for required in (
+        "github.event.issue.pull_request",
+        "github.event.comment.author_association",
+        "OWNER",
+        "MEMBER",
+        "COLLABORATOR",
+    ):
+        assert required in condition
+    assert job["permissions"] == {
+        "actions": "read",
+        "contents": "read",
+        "issues": "write",
+        "pull-requests": "read",
+    }
+    assert job["runs-on"] == "ubuntu-24.04"
+    assert job["timeout-minutes"] <= 5
+
+    text = path.read_text(encoding="utf-8")
+    assert "pull_request_target" not in text
+    assert "workflow_run" not in text
+    assert "actions/cache" not in text
+    assert "secrets." not in text
+    assert "github.event.pull_request.head" not in text
+
+    checkout = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@"))
+    assert checkout["with"] == {
+        "ref": "${{ github.event.repository.default_branch }}",
+        "fetch-depth": 1,
+        "persist-credentials": False,
+    }
+    command = job["steps"][-1]
+    assert command["run"] == "python3 -m vibeci.github_commands"
+    assert command["env"] == {
+        "GITHUB_API_URL": "https://api.github.com",
+        "GITHUB_EVENT_PATH": "${{ github.event_path }}",
+        "GITHUB_REPOSITORY": "${{ github.repository }}",
+        "GITHUB_TOKEN": "${{ github.token }}",
+    }
+
+
 def test_action_metadata_is_complete():
     action = _load(ROOT / "action.yml")
     assert action["runs"]["using"] == "composite"

@@ -112,9 +112,25 @@ A GBNF/JSON-schema grammar guarantees syntax only. It cannot stop a model from p
 
 ## GitHub PRs, issues and schedules
 
-Standard scans already expose findings through PR annotations, reviews, the job summary and the `vibeci-review` JSON artifact. Same-repository review posting requires only `contents: read` plus `pull-requests: write`; missing/insufficient access now returns a failing Action annotation with GitHub's official token-permission URL instead of silently succeeding. Fork PRs intentionally stay read-only. The slash parser is currently local/durable-state only. A privileged `issue_comment` executor is deliberately **not** shipped yet: GitHub comment events run default-branch code with write-capable issue/PR permissions, GitHub-hosted runners are ephemeral, and low-trust caches need special handling. `FUTURE.md` lists the requirements for a safe adapter.
+Standard scans expose findings through PR annotations, reviews, the job summary and the `vibeci-review` JSON artifact. Same-repository review posting requires only `contents: read` plus `pull-requests: write`; missing/insufficient access returns a failing Action annotation with GitHub's official token-permission URL instead of silently succeeding. Fork PR scans intentionally stay read-only.
 
-`/schedule` therefore validates and records only a proposal for `/verify` or `/status`; it never writes workflow YAML. GitHub schedules use the latest default-branch commit, may be delayed or dropped, and are not a persistent exact-time daemon. Exact limits and the accessed official URL are in `RESEARCH.md`.
+GitHub PR comments have a separate diagnostics-only path:
+
+```text
+trusted PR comment (`OWNER`/`MEMBER`/`COLLABORATOR`)
+    -> issue_comment workflow from the default branch
+    -> independent event/role/grammar validation
+    -> GET pull request current head SHA
+    -> GET bounded Actions runs + jobs for that exact SHA
+    -> render escaped help/status/runner/failing-step metadata
+    -> POST one bounded issue comment
+```
+
+`vibeci.github_commands` accepts case-insensitive `/help`, `/ci`, `/runs`, `/run <id>`, `/runners`, and `/failures`, with or without `/vibeci`. The workflow checks actor association before checkout and Python checks it again. It explicitly checks out the repository default branch, never the contributor ref, installs no dependency, restores/writes no cache and receives no repository secret. Its `GITHUB_TOKEN` has only `actions: read`, `contents: read`, `pull-requests: read`, and `issues: write`; it cannot rerun, cancel, approve or merge. Output includes assigned job runner names/groups/labels and failed step names, but never potentially sensitive job-log text. A requested run ID must match the PR's current head SHA.
+
+The repository deliberately does not request administration access for a full self-hosted-runner inventory. `/runners` reports only runner assignments exposed by current-head workflow jobs. The command workflow becomes active only after it exists on the default branch, matching GitHub's `issue_comment` dispatch rules.
+
+Stateful slash commands remain local. GitHub-hosted runners are ephemeral, so comments cannot invoke goal/plan/approval/worktree operations until durable tamper-evident state and restoration have a tested design. `/schedule` likewise validates and records only a proposal for `/verify` or `/status`; it never writes workflow YAML. GitHub schedules use the latest default-branch commit, may be delayed or dropped, and are not a persistent exact-time daemon. Exact limits and the accessed official URLs are in `RESEARCH.md`.
 
 ## Fork PRs
 
