@@ -1,6 +1,7 @@
 # Future development
 
-**Updated:** 2026-10-25  
+**Updated:** 2026-10-26
+
 This file separates shipped behavior from planned work. A checkbox is completed only when code, tests and documentation exist; names alone are not implementations.
 
 ## Shipped in the current branch
@@ -22,7 +23,7 @@ This file separates shipped behavior from planned work. A checkbox is completed 
 - [x] Pinned 3B fast candidate in addition to the 7B default.
 - [x] Review-post permission failures produce failing GitHub annotations and link the official least-privilege token guide.
 - [x] Disabled-by-default tokenless SearXNG JSON search and allowlisted direct text fetch with strict URL/time/byte/result/no-redirect controls.
-- [x] Least-privilege, read-only GitHub PR comment diagnostics for help, current CI, runs, assigned runners and failed steps. The adapter executes default-branch code only, checks repository role twice and never checks out contributor code.
+- [x] Least-privilege, read-only GitHub issue/PR diagnostics for help, exact target CI, runs, assigned runners and failed steps. The adapter executes an exact default-branch event SHA, combines dual repository-role checks with a secret-backed login/user-ID/control-issue allowlist, supports only default/same-repository-PR targets and never checks out contributor code.
 
 ## Next — required before stateful or autonomous execution from GitHub comments
 

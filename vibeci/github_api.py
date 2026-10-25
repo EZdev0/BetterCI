@@ -12,8 +12,10 @@ from urllib.request import Request, urlopen
 API_VERSION = "2026-03-10"
 MAX_COMMENT_CHARS = 24_000
 MAX_RUNS = 5
+MAX_CANDIDATE_RUNS = 50
 MAX_JOBS = 50
-_MAX_RESPONSE_BYTES = MAX_COMMENT_CHARS * 20
+MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+REQUEST_TIMEOUT_SECONDS = 20
 _REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
@@ -68,13 +70,13 @@ class GitHubAPI:
             },
         )
         try:
-            with urlopen(request, timeout=20) as response:  # noqa: S310 - fixed HTTPS API origin
-                raw = response.read(_MAX_RESPONSE_BYTES + 1)
+            with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:  # noqa: S310 - fixed HTTPS API origin
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
         except HTTPError as exc:
             raise GitHubAPIError(operation, exc.code) from exc
         except (TimeoutError, URLError, OSError) as exc:
             raise GitHubAPIError(operation, None) from exc
-        if len(raw) > _MAX_RESPONSE_BYTES:
+        if len(raw) > MAX_RESPONSE_BYTES:
             raise GitHubAPIError(operation, None)
         try:
             return json.loads(raw) if raw else {}
@@ -95,12 +97,12 @@ class GitHubAPI:
         data = self._request(
             "list workflow runs",
             f"{self._repo_path}/actions/runs",
-            query={"head_sha": head_sha, "per_page": MAX_RUNS},
+            query={"head_sha": head_sha, "per_page": MAX_CANDIDATE_RUNS},
         )
         runs = data.get("workflow_runs") if isinstance(data, dict) else None
         if not isinstance(runs, list):
             raise GitHubAPIError("list workflow runs", None)
-        return [run for run in runs[:MAX_RUNS] if isinstance(run, dict)]
+        return [run for run in runs[:MAX_CANDIDATE_RUNS] if isinstance(run, dict)]
 
     def workflow_run(self, run_id: int) -> dict[str, Any]:
         data = self._request("read workflow run", f"{self._repo_path}/actions/runs/{run_id}")

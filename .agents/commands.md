@@ -1,6 +1,6 @@
 # Slash commands
 
-Local control-plane commands are ASCII, case-insensitive and parsed without shell evaluation through `python -m vibeci agent`. GitHub PR comments expose a separate read-only CI diagnostic surface documented below; they do not invoke the stateful local controller.
+Local control-plane commands are ASCII, case-insensitive and parsed without shell evaluation through `python -m vibeci agent`. Policy-authorized GitHub issue/PR comments expose a separate read-only CI diagnostic surface documented below; they do not invoke the stateful local controller.
 
 | Command | Effect | Writes code? |
 |---|---|---:|
@@ -24,19 +24,21 @@ Local control-plane commands are ASCII, case-insensitive and parsed without shel
 | `/notifications [all|open]` / `/ack <notification-id>` | Inspect or acknowledge durable local notices, warnings and errors. | State only |
 | `/schedule <five-field-cron> -- <safe-operation>` | Validate a future orchestration proposal for `/verify` or `/status`. It does not invoke the local task command or edit workflow YAML. | State only |
 
-## GitHub PR comment diagnostics
+## GitHub issue and PR comment diagnostics
 
-After `.github/workflows/vibeci-commands.yml` exists on the default branch, an `OWNER`, `MEMBER`, or `COLLABORATOR` may use these commands in a pull-request conversation. Commands and the optional `/vibeci` prefix are case-insensitive.
+After `.github/workflows/vibeci-commands.yml` exists on the default branch and `VIBECI_COMMAND_POLICY_JSON` is configured, an exact policy-listed login/user-ID pair with repository role `OWNER`, `MEMBER`, or `COLLABORATOR` may use these commands. Normal issues must also appear in the policy's `control_issues` list. Commands and the optional `/vibeci` prefix are case-insensitive.
 
 | Command | Effect |
 |---|---|
-| `/help` or `/vibeci help` | Show the GitHub diagnostic command contract and security boundaries. |
-| `/ci` or `/vibeci ci` | Show current-head workflow runs, job conclusions, assigned runner names/groups/labels and failed step names. |
-| `/runs` or `/vibeci runs` | List up to five recent workflow runs bound to the pull request's current head SHA. |
-| `/run <run-id>` or `/vibeci run <run-id>` | Show one run only if it belongs to the pull request's current head SHA. |
-| `/runners` or `/vibeci runners` | Show runners actually assigned to current-head jobs. This is not an admin-level self-hosted runner inventory. |
-| `/failures` or `/vibeci failures` | Show failed/cancelled/timed-out jobs and failing steps for current-head runs. |
+| `/help` or `/vibeci help` | Show the GitHub diagnostic command contract, authorization and security boundaries. |
+| `/ci [--target default\|pr:<number>]` | Show target-bound workflow runs, jobs, runner assignments and failed steps. |
+| `/runs [--target default\|pr:<number>]` | List up to five non-command workflow runs bound to the exact target SHA. |
+| `/run <run-id> [--target default\|pr:<number>]` | Show one run only if it belongs to the selected target's exact SHA. |
+| `/runners [--target default\|pr:<number>]` | Show runners assigned to target-bound jobs, not an admin runner inventory. |
+| `/failures [--target default\|pr:<number>]` | Show failed/cancelled/timed-out jobs and failing steps for target-bound runs. |
 
-Run/job views are bounded to five runs and 50 latest-attempt jobs per run; larger matrices remain available through the linked GitHub run. The workflow executes only committed default-branch code, never the contributor checkout. It reads the event payload as data, does not interpolate comment text into a shell, installs no dependencies, uses no cache, and never exposes job-log content. It requests `actions: read`, `contents: read`, `pull-requests: read`, and `issues: write`; it cannot rerun or cancel jobs. Because GitHub only activates an `issue_comment` workflow present on the default branch, this surface becomes available after the reviewed workflow is merged.
+Without `--target`, PR conversations resolve to that PR's current head while policy-listed control issues resolve to the exact default-branch event SHA. The only explicit selectors are `default` and a positive same-repository `pr:<number>`; arbitrary refs, branches and SHAs fail closed. The workflow scans at most 50 candidate runs, excludes its own command runs, reports at most five runs, inspects 50 latest-attempt jobs per run, caps each REST response at 2 MiB with a 20-second timeout, and caps a posted response at 24,000 characters.
+
+The workflow checks out only the event's exact default-branch SHA and never the contributor checkout. Only the Python handler receives the bounded policy secret. It validates repository, role, event actor/login/user-ID and control-issue scope before reading metadata; missing or malformed policy fails without printing its value. Comment/policy text never enters a shell, dependency, cache or checkout ref. The token requests only `actions: read`, `contents: read`, `pull-requests: read`, and `issues: write`; it cannot start, rerun, cancel, approve or merge. Because GitHub only activates an `issue_comment` workflow present on the default branch, new behavior becomes available after the reviewed workflow is merged.
 
 Unknown options, missing acceptance criteria, missing references, hidden/unsafe paths, risky instruction overrides, arbitrary schedule commands, open blocking questions and stale plan IDs fail closed. `/approve` never means merge. GitHub scheduled workflows run from the latest default-branch commit, can be delayed or dropped under load, use UTC by default, have a five-minute minimum interval, and public-repository schedules disable after 60 days without activity; see `RESEARCH.md`.

@@ -1,156 +1,65 @@
-"""Read-only GitHub PR comment commands for CI and runner diagnostics.
+"""Read-only GitHub issue and PR commands for CI and runner diagnostics.
 
 The module intentionally uses only the Python standard library so the
 ``issue_comment`` workflow can execute reviewed default-branch code without
-installing dependencies or restoring a cache. Comment text is parsed as data;
-it never becomes a shell command, ref, URL, or API path.
+installing dependencies or restoring a cache. Comment text and authorization
+policy are parsed as data; neither becomes a shell command, checkout ref, URL,
+or unrestricted API path.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import re
 import sys
-from dataclasses import dataclass
 from typing import Any
 
-from .github_api import MAX_COMMENT_CHARS, MAX_JOBS, GitHubAPI, GitHubAPIError
+from .github_api import (
+    MAX_CANDIDATE_RUNS,
+    MAX_COMMENT_CHARS,
+    MAX_JOBS,
+    MAX_RESPONSE_BYTES,
+    MAX_RUNS,
+    REQUEST_TIMEOUT_SECONDS,
+    GitHubAPI,
+    GitHubAPIError,
+)
+from .github_policy import (
+    MAX_POLICY_CHARS,
+    CommandEvent,
+    CommandPolicy,
+    CommandPolicyError,
+    CommandUsageError,
+    command_event,
+    parse_comment,
+    parse_policy,
+    resolve_target,
+    validate_runtime_context,
+)
 
-MAX_COMMAND_CHARS = 200
+__all__ = [
+    "MAX_COMMENT_CHARS",
+    "MAX_POLICY_CHARS",
+    "CommandPolicy",
+    "CommandPolicyError",
+    "CommandUsageError",
+    "GitHubAPI",
+    "main",
+    "parse_comment",
+    "parse_policy",
+    "run",
+]
+
 MAX_FAILED_STEPS = 5
-TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
-_COMMAND_NAMES = frozenset({"help", "ci", "runs", "run", "runners", "failures"})
-_BARE_COMMANDS = frozenset(f"/{name}" for name in _COMMAND_NAMES)
-_TERMINAL_FAILURES = frozenset({"failure", "cancelled", "timed_out", "action_required", "startup_failure", "stale"})
-_HEAD_SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
+_TERMINAL_FAILURES = frozenset(
+    {"failure", "cancelled", "timed_out", "action_required", "startup_failure", "stale"}
+)
+_COMMAND_WORKFLOW_PATH = ".github/workflows/vibeci-commands.yml"
 _RESPONSE_MARKER = "<!-- vibeci-read-only-ci-diagnostics -->"
 _PERMISSION_HELP = (
     "https://docs.github.com/en/actions/security-for-github-actions/security-guides/"
     "automatic-token-authentication#modifying-the-permissions-for-the-github_token"
 )
-
-
-class CommandUsageError(ValueError):
-    """The comment selected this adapter but did not match its bounded grammar."""
-
-
-@dataclass(frozen=True)
-class ParsedCommand:
-    name: str
-    run_id: int | None = None
-
-
-@dataclass(frozen=True)
-class CommandEvent:
-    repository: str
-    issue_number: int
-    comment_id: int
-    head_sha: str
-    command: ParsedCommand
-
-
-def _targets_adapter(line: str) -> bool:
-    first = line.split(maxsplit=1)[0].casefold() if line.split() else ""
-    return first == "/vibeci" or first in _BARE_COMMANDS
-
-
-def _command_tokens(body: str) -> list[str] | None:
-    if not isinstance(body, str):
-        return None
-    first_line = body.lstrip().splitlines()[0].strip() if body.strip() else ""
-    if len(body) > MAX_COMMAND_CHARS:
-        if _targets_adapter(first_line):
-            raise CommandUsageError(f"command exceeds {MAX_COMMAND_CHARS} characters")
-        return None
-    lines = [line.strip() for line in body.splitlines() if line.strip()]
-    if not lines:
-        return None
-    if len(lines) != 1:
-        if _targets_adapter(lines[0]):
-            raise CommandUsageError("use exactly one command line")
-        return None
-    tokens = lines[0].split()
-    return tokens if tokens and tokens[0].isascii() else None
-
-
-def _normalized_command(tokens: list[str]) -> tuple[str, list[str], bool] | None:
-    prefixed = tokens[0].casefold() == "/vibeci"
-    if prefixed:
-        tokens = tokens[1:]
-        if not tokens:
-            return "help", [], True
-        tokens[0] = tokens[0].removeprefix("/")
-    else:
-        command_token = tokens[0].casefold()
-        if command_token not in _BARE_COMMANDS:
-            return None
-        tokens[0] = command_token.removeprefix("/")
-    return tokens[0].casefold(), tokens[1:], prefixed
-
-
-def parse_comment(body: str) -> ParsedCommand | None:
-    """Parse one case-insensitive command line; unrelated slash commands are ignored."""
-    tokens = _command_tokens(body)
-    if tokens is None:
-        return None
-    normalized = _normalized_command(tokens)
-    if normalized is None:
-        return None
-    name, arguments, prefixed = normalized
-    if not name.isascii() or name not in _COMMAND_NAMES:
-        if prefixed:
-            raise CommandUsageError(f"unknown read-only command: {name}")
-        return None
-    if name != "run":
-        if arguments:
-            raise CommandUsageError(f"/{name} takes no arguments")
-        return ParsedCommand(name)
-    if len(arguments) != 1 or not arguments[0].isascii() or not arguments[0].isdigit():
-        raise CommandUsageError("usage: /run <numeric-run-id>")
-    run_id = int(arguments[0])
-    if run_id < 1:
-        raise CommandUsageError("workflow run ID must be positive")
-    return ParsedCommand(name, run_id)
-
-
-def command_event(event: dict[str, Any], repository: str) -> CommandEvent | None:
-    """Authorize and bind one command to a PR before any Actions metadata read."""
-    if not isinstance(event, dict) or event.get("action") != "created":
-        return None
-    event_repository = event.get("repository", {})
-    if not isinstance(event_repository, dict) or event_repository.get("full_name") != repository:
-        return None
-    issue = event.get("issue", {})
-    comment = event.get("comment", {})
-    if not isinstance(issue, dict) or not isinstance(comment, dict) or not issue.get("pull_request"):
-        return None
-    if str(comment.get("author_association", "")).upper() not in TRUSTED_ASSOCIATIONS:
-        return None
-    command = parse_comment(comment.get("body", ""))
-    if command is None:
-        return None
-    issue_number = issue.get("number")
-    comment_id = comment.get("id")
-    if not isinstance(issue_number, int) or issue_number < 1:
-        raise CommandUsageError("event has no valid pull request number")
-    if not isinstance(comment_id, int) or comment_id < 1:
-        raise CommandUsageError("event has no valid comment ID")
-    return CommandEvent(repository, issue_number, comment_id, "", command)
-
-
-def _with_head_sha(command: CommandEvent, pull_request: dict[str, Any]) -> CommandEvent:
-    head = pull_request.get("head") if isinstance(pull_request, dict) else None
-    head_sha = head.get("sha") if isinstance(head, dict) else None
-    if not isinstance(head_sha, str) or not _HEAD_SHA.fullmatch(head_sha):
-        raise GitHubAPIError("validate pull request head", None)
-    return CommandEvent(
-        repository=command.repository,
-        issue_number=command.issue_number,
-        comment_id=command.comment_id,
-        head_sha=head_sha.lower(),
-        command=command.command,
-    )
 
 
 def _markdown(value: Any, maximum: int = 100) -> str:
@@ -214,8 +123,32 @@ def _failed_steps(job: dict[str, Any]) -> list[str]:
     return names[:MAX_FAILED_STEPS]
 
 
-def _runs_for_head(api: GitHubAPI, head_sha: str) -> list[dict[str, Any]]:
-    return [run for run in api.workflow_runs(head_sha) if str(run.get("head_sha", "")).lower() == head_sha]
+def _is_command_workflow_run(run: dict[str, Any]) -> bool:
+    path = str(run.get("path", "")).split("@", 1)[0]
+    return path == _COMMAND_WORKFLOW_PATH
+
+
+def _runs_for_head(api: GitHubAPI, head_sha: str) -> tuple[list[dict[str, Any]], bool]:
+    candidates = api.workflow_runs(head_sha)
+    runs = [
+        run
+        for run in candidates
+        if str(run.get("head_sha", "")).lower() == head_sha and not _is_command_workflow_run(run)
+    ]
+    return runs[:MAX_RUNS], len(candidates) >= MAX_CANDIDATE_RUNS
+
+
+def _target_line(event: CommandEvent) -> str:
+    return f"Exact target ({event.target_label}): `{event.head_sha}`"
+
+
+def _candidate_notice(candidate_limit_reached: bool) -> list[str]:
+    if not candidate_limit_reached:
+        return []
+    return [
+        "",
+        f"⚠️ The scan reached its {MAX_CANDIDATE_RUNS}-candidate bound before command-workflow filtering.",
+    ]
 
 
 def _run_table(repository: str, runs: list[dict[str, Any]]) -> list[str]:
@@ -267,27 +200,35 @@ def _help() -> str:
             "| Command | Result |",
             "|---|---|",
             "| `/help` | Show this contract. |",
-            "| `/ci` | Show current-head runs, jobs, runner assignments and failed steps. |",
-            "| `/runs` | List up to five runs for the PR's exact current head SHA. |",
-            "| `/run <id>` | Show one current-head run and its jobs. |",
-            "| `/runners` | Show runners assigned to current-head jobs. |",
-            "| `/failures` | Show failed/cancelled/timed-out jobs and failed steps. |",
+            "| `/ci [--target default\\|pr:<number>]` | Show runs, jobs, runners and failed steps. |",
+            "| `/runs [--target default\\|pr:<number>]` | List up to five runs for the exact target SHA. |",
+            "| `/run <id> [--target default\\|pr:<number>]` | Show one target-bound run and its jobs. |",
+            "| `/runners [--target default\\|pr:<number>]` | Show runners assigned to target-bound jobs. |",
+            "| `/failures [--target default\\|pr:<number>]` | Show failed jobs and failed steps. |",
             "",
-            "Examples: `/Help`, `/vibeci ci`, `/RUN 40240597994`.",
+            "Without `--target`, a PR conversation selects that PR's current head; an allowed control issue "
+            "selects the exact default-branch event head.",
+            "Examples: `/Help`, `/vibeci ci --target default`, `/runs --target pr:5`.",
             "",
+            "Access requires both a trusted repository role and an exact login/user-ID policy match; ordinary "
+            "issues must also be policy-listed control issues.",
             "This surface is diagnostics-only: it cannot run, rerun, cancel, approve, merge, or execute PR code. "
             "It reports runner assignments from workflow jobs, not an admin-level self-hosted-runner inventory.",
+            f"At most {MAX_CANDIDATE_RUNS} candidate runs are scanned and {MAX_RUNS} non-command runs reported.",
             f"Each run view is capped at {MAX_JOBS} latest-attempt jobs; use the linked run for a larger matrix.",
+            f"Each REST response is capped at {MAX_RESPONSE_BYTES // (1024 * 1024)} MiB with a "
+            f"{REQUEST_TIMEOUT_SECONDS}-second timeout.",
         ]
     )
 
 
-def _render_runs(repository: str, head_sha: str, runs: list[dict[str, Any]]) -> str:
-    lines = ["## VibeCI runs", "", f"Exact PR head: `{head_sha}`", ""]
+def _render_runs(event: CommandEvent, runs: list[dict[str, Any]], candidate_limit_reached: bool) -> str:
+    lines = ["## VibeCI runs", "", _target_line(event), ""]
     if not runs:
-        lines.append("No GitHub Actions workflow runs were found for this exact head commit.")
+        lines.append("No eligible GitHub Actions workflow runs were found for this exact target commit.")
     else:
-        lines.extend(_run_table(repository, runs))
+        lines.extend(_run_table(event.repository, runs))
+    lines.extend(_candidate_notice(candidate_limit_reached))
     return "\n".join(lines)
 
 
@@ -295,14 +236,17 @@ def _render_one_run(api: GitHubAPI, event: CommandEvent, run: dict[str, Any]) ->
     run_id = _run_id(run)
     if run_id is None:
         raise GitHubAPIError("validate workflow run", None)
+    if _is_command_workflow_run(run):
+        raise CommandUsageError("requested run is the read-only command adapter itself")
     if str(run.get("head_sha", "")).lower() != event.head_sha:
-        raise CommandUsageError("requested run does not belong to this pull request's current head SHA")
+        raise CommandUsageError("requested run does not belong to the selected target's exact head SHA")
     jobs = api.workflow_jobs(run_id)
     lines = [
         "## VibeCI workflow run",
         "",
         f"- Run: [#{run_id}]({_run_link(event.repository, run_id)})",
         f"- Workflow: **{_markdown(run.get('name'))}**",
+        f"- Target: {_markdown(event.target_label, 80)}",
         f"- Head: `{event.head_sha}`",
         f"- Event: `{_markdown(run.get('event'), 30)}`",
         f"- State: {_state(_result(run))}",
@@ -313,26 +257,38 @@ def _render_one_run(api: GitHubAPI, event: CommandEvent, run: dict[str, Any]) ->
     return "\n".join(lines)
 
 
-def _render_ci(api: GitHubAPI, event: CommandEvent, runs: list[dict[str, Any]]) -> str:
-    lines = ["## VibeCI current CI", "", f"Exact PR head: `{event.head_sha}`", ""]
+def _render_ci(
+    api: GitHubAPI,
+    event: CommandEvent,
+    runs: list[dict[str, Any]],
+    candidate_limit_reached: bool,
+) -> str:
+    lines = ["## VibeCI current CI", "", _target_line(event), ""]
     if not runs:
-        return "\n".join([*lines, "No GitHub Actions workflow runs were found for this exact head commit."])
-    lines.extend(_run_table(event.repository, runs))
-    for run in runs:
-        run_id = _run_id(run)
-        if run_id is None:
-            continue
-        jobs = api.workflow_jobs(run_id)
-        lines.extend(["", f"### Run #{run_id}: {_markdown(run.get('name'))}", ""])
-        lines.extend(_job_table(event.repository, run_id, jobs))
+        lines.append("No eligible GitHub Actions workflow runs were found for this exact target commit.")
+    else:
+        lines.extend(_run_table(event.repository, runs))
+        for run in runs:
+            run_id = _run_id(run)
+            if run_id is None:
+                continue
+            jobs = api.workflow_jobs(run_id)
+            lines.extend(["", f"### Run #{run_id}: {_markdown(run.get('name'))}", ""])
+            lines.extend(_job_table(event.repository, run_id, jobs))
+    lines.extend(_candidate_notice(candidate_limit_reached))
     return "\n".join(lines)
 
 
-def _render_runners(api: GitHubAPI, event: CommandEvent, runs: list[dict[str, Any]]) -> str:
+def _render_runners(
+    api: GitHubAPI,
+    event: CommandEvent,
+    runs: list[dict[str, Any]],
+    candidate_limit_reached: bool,
+) -> str:
     lines = [
         "## VibeCI assigned runners",
         "",
-        f"Exact PR head: `{event.head_sha}`",
+        _target_line(event),
         "",
         "This is job-assignment evidence, not an admin-level self-hosted-runner inventory.",
         "",
@@ -361,11 +317,17 @@ def _render_runners(api: GitHubAPI, event: CommandEvent, runs: list[dict[str, An
         lines.append("| — | No jobs have an assigned runner yet. | — | — | — | — |")
     if capped:
         lines.extend(["", f"⚠️ Each run's latest-attempt view is capped at {MAX_JOBS} jobs."])
+    lines.extend(_candidate_notice(candidate_limit_reached))
     return "\n".join(lines)
 
 
-def _render_failures(api: GitHubAPI, event: CommandEvent, runs: list[dict[str, Any]]) -> str:
-    lines = ["## VibeCI failures", "", f"Exact PR head: `{event.head_sha}`", ""]
+def _render_failures(
+    api: GitHubAPI,
+    event: CommandEvent,
+    runs: list[dict[str, Any]],
+    candidate_limit_reached: bool,
+) -> str:
+    lines = ["## VibeCI failures", "", _target_line(event), ""]
     failed: list[tuple[int, dict[str, Any]]] = []
     capped = False
     for run in runs:
@@ -379,20 +341,21 @@ def _render_failures(api: GitHubAPI, event: CommandEvent, runs: list[dict[str, A
         qualifier = f" among the first {MAX_JOBS} latest-attempt jobs per run" if capped else ""
         lines.append(
             "No failed, cancelled, timed-out, stale, or action-required jobs were found"
-            f"{qualifier} for current-head runs."
+            f"{qualifier} for target-bound runs."
         )
-        return "\n".join(lines)
-    lines.extend(["| Run | Job | State | Failed step(s) |", "|---:|---|---|---|"])
-    for run_id, job in failed:
-        failed_steps = ", ".join(_failed_steps(job)) or "No failed step name was reported; open the job link."
-        lines.append(
-            f"| [#{run_id}]({_run_link(event.repository, run_id)}) | "
-            f"[{_markdown(job.get('name'), 100)}]({_job_link(event.repository, run_id, job)}) | "
-            f"{_state(_result(job))} | {failed_steps} |"
-        )
-    lines.extend(["", "Job logs are intentionally not copied into comments; use the linked GitHub job view."])
+    else:
+        lines.extend(["| Run | Job | State | Failed step(s) |", "|---:|---|---|---|"])
+        for run_id, job in failed:
+            failed_steps = ", ".join(_failed_steps(job)) or "No failed step name was reported; open the job link."
+            lines.append(
+                f"| [#{run_id}]({_run_link(event.repository, run_id)}) | "
+                f"[{_markdown(job.get('name'), 100)}]({_job_link(event.repository, run_id, job)}) | "
+                f"{_state(_result(job))} | {failed_steps} |"
+            )
+        lines.extend(["", "Job logs are intentionally not copied into comments; use the linked GitHub job view."])
     if capped:
         lines.append(f"⚠️ Each run's latest-attempt view is capped at {MAX_JOBS} jobs.")
+    lines.extend(_candidate_notice(candidate_limit_reached))
     return "\n".join(lines)
 
 
@@ -405,15 +368,15 @@ def render_command(api: GitHubAPI, event: CommandEvent) -> str:
             raise CommandUsageError("usage: /run <numeric-run-id>")
         body = _render_one_run(api, event, api.workflow_run(event.command.run_id))
     else:
-        runs = _runs_for_head(api, event.head_sha)
+        runs, candidate_limit_reached = _runs_for_head(api, event.head_sha)
         if event.command.name == "runs":
-            body = _render_runs(event.repository, event.head_sha, runs)
+            body = _render_runs(event, runs, candidate_limit_reached)
         elif event.command.name == "ci":
-            body = _render_ci(api, event, runs)
+            body = _render_ci(api, event, runs, candidate_limit_reached)
         elif event.command.name == "runners":
-            body = _render_runners(api, event, runs)
+            body = _render_runners(api, event, runs, candidate_limit_reached)
         elif event.command.name == "failures":
-            body = _render_failures(api, event, runs)
+            body = _render_failures(api, event, runs, candidate_limit_reached)
         else:  # Defensive: parser and dispatch must evolve together.
             raise CommandUsageError(f"unsupported command: {event.command.name}")
     return _bounded_response(body, event.comment_id)
@@ -484,10 +447,17 @@ def _event_comment_ids(event: dict[str, Any]) -> tuple[int, int] | None:
     return issue_number, comment_id
 
 
-def run(event: dict[str, Any], repository: str, api: GitHubAPI) -> int:
+def run(
+    event: dict[str, Any],
+    repository: str,
+    api: GitHubAPI,
+    policy: CommandPolicy,
+    actor: str,
+    default_sha: str,
+) -> int:
     """Handle one event. Irrelevant or unauthorized comments are silent no-ops."""
     try:
-        command = command_event(event, repository)
+        command = command_event(event, repository, policy, actor, default_sha)
     except CommandUsageError as exc:
         coordinates = _event_comment_ids(event)
         if coordinates is not None:
@@ -500,7 +470,8 @@ def run(event: dict[str, Any], repository: str, api: GitHubAPI) -> int:
     if command is None:
         return 0
     try:
-        command = _with_head_sha(command, api.pull_request(command.issue_number))
+        if command.command.name != "help":
+            command = resolve_target(command, api)
         response = render_command(api, command)
     except CommandUsageError as exc:
         try:
@@ -528,13 +499,17 @@ def main() -> int:
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     event_path = os.environ.get("GITHUB_EVENT_PATH", "")
     token = os.environ.get("GITHUB_TOKEN", "")
+    actor = os.environ.get("VIBECI_ACTOR", "")
+    default_sha = os.environ.get("VIBECI_DEFAULT_SHA", "")
     try:
         if not event_path:
             raise ValueError("GITHUB_EVENT_PATH is required")
+        validate_runtime_context(actor, default_sha)
+        policy = parse_policy(os.environ.get("VIBECI_COMMAND_POLICY_JSON", ""))
         with open(event_path, encoding="utf-8") as handle:
             event = json.load(handle)
         api = GitHubAPI(repository, token, os.environ.get("GITHUB_API_URL", "https://api.github.com"))
-        return run(event, repository, api)
+        return run(event, repository, api, policy, actor, default_sha)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         _annotation(str(exc))
         return 2

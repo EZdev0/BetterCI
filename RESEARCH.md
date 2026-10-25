@@ -1,6 +1,7 @@
 # Research log
 
-**Last updated:** 2026-10-25 (Europe/Berlin)  
+**Last updated:** 2026-10-26 (Europe/Berlin)
+
 **Method:** official documentation and official GitHub repositories were searched/read through the web interface. No source repository below was cloned or executed during this update. Runtime claims remain unverified until a reproducible local/CI measurement is committed.
 
 This is the canonical append-only research log for current architecture decisions. The older audit snapshot remains in [`docs/RESEARCH.md`](docs/RESEARCH.md).
@@ -12,6 +13,13 @@ This is the canonical append-only research log for current architecture decision
 - **UNVERIFIED:** hypothesis or candidate that needs a committed benchmark.
 - Every new time-sensitive claim must record an access date and URL here. Search snippets are discovery aids; implementation decisions should prefer the linked primary document/repository.
 
+## Access log — 2026-10-26
+
+| Source (accessed 2026-10-26) | Observed primary-source fact | Decision in BetterCI |
+|---|---|---|
+| [GitHub Actions `issue_comment` event](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#issue_comment) | `issue_comment` covers comments on both issues and pull requests; `GITHUB_SHA` is the last commit on the default branch, and `github.event.issue.pull_request` distinguishes PR conversations from normal issues. | Checkout is pinned to the exact event `github.sha`. PR auto-targets resolve through the pull-request API; policy-listed control issues use that trusted default-branch event SHA. The old unconditional PR marker gate is removed. |
+| [GitHub Actions secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets#using-secrets-in-a-workflow) | Secrets cannot be referenced directly in `if:` conditionals, and a reference to an unset secret evaluates to an empty string. | Keep the public repository-association check in the job condition; expose only `VIBECI_COMMAND_POLICY_JSON` to the Python step; independently require exact login/user-ID/control-issue policy data before API reads; reject missing/malformed policy without logging its content. |
+
 ## Access log — 2026-10-25
 
 | Source (accessed 2026-10-25) | Observed primary-source fact | Decision in BetterCI |
@@ -21,7 +29,7 @@ This is the canonical append-only research log for current architecture decision
 | [GitHub workflow-jobs REST API](https://docs.github.com/en/rest/actions/workflow-jobs?apiVersion=2026-03-10) | Run jobs expose job/step status and conclusion plus assigned runner ID/name/group/labels. Anyone with repository read access can read the endpoint; private repositories require suitable authentication. | Diagnostics show bounded job metadata, assigned runners and failed step names with links. They never copy log contents into a PR comment. |
 | [GitHub issue-comments REST API](https://docs.github.com/en/rest/issues/comments?apiVersion=2026-03-10) | Creating an issue/PR conversation comment accepts either `Issues: write` or `Pull requests: write`; reading is available with the corresponding read permission. | The diagnostic workflow requests `issues: write` solely for its response and keeps pull requests at read-only. |
 | [GitHub self-hosted-runner REST API](https://docs.github.com/en/rest/actions/self-hosted-runners?apiVersion=2026-03-10) | Full repository/organization self-hosted-runner inventory requires administrative access (or dedicated organization self-hosted-runner permission), substantially broader than Actions metadata read access. | BetterCI does not request admin access. `/runners` honestly reports only runners assigned to jobs for the PR's current head SHA. |
-| [GitHub secure use](https://docs.github.com/en/actions/reference/security/secure-use) | Least privilege; avoid unnecessary `pull_request_target`; never interpolate untrusted expressions directly into shell; privileged workflows must not execute untrusted PR code. | No PR/issue text becomes shell input. Comment diagnostics role-check twice, execute only default-branch code, receive no repository secrets, use no cache, and never check out contributor code. |
+| [GitHub secure use](https://docs.github.com/en/actions/reference/security/secure-use) | Least privilege; avoid unnecessary `pull_request_target`; never interpolate untrusted expressions directly into shell; privileged workflows must not execute untrusted PR code. | No PR/issue/policy text becomes shell input. Comment diagnostics role-check twice, execute an exact default-branch event SHA, expose only the bounded authorization-policy secret to Python, use no cache, and never check out contributor code. |
 | [GitHub workflow execution protections](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/actions-policies/workflow-execution-protections) | **SOURCE CLAIM:** current repository/organization policies can restrict which actors and events may trigger Actions workflows. | Code-level role checks remain mandatory; administrators may additionally allowlist the `issue_comment` event/actors without weakening BetterCI's checks. |
 | [GitHub automatic token authentication](https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#modifying-the-permissions-for-the-github_token) | Workflow/job `permissions` controls `GITHUB_TOKEN`; GitHub recommends granting the minimum required access. | Review-post failures now fail visibly with this URL and request only `contents: read` plus `pull-requests: write`, never “all permissions.” |
 | [GitHub cache security](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching) | Low-trust triggers such as `issue_comment`, `workflow_run` and `pull_request_target` can poison privileged caches if write-capable cache mode is enabled; current defaults restrict those triggers. | Do not cache agent output from low-trust command events; archives/models are re-hashed before execution. |

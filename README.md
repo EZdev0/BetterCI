@@ -98,20 +98,30 @@ Scope settings hide configured directories/extensions (including `.eng`) from pl
 
 `/approve` never means merge. `/schedule` records only a validated `/verify` or `/status` proposal; it never silently creates workflow YAML. Standard PR findings remain visible through annotations, reviews, summaries and JSON artifacts. Stateful comment execution remains deliberately unshipped until durable state, stronger authorization, low-trust cache handling and ephemeral-runner recovery are solved; see `FUTURE.md`.
 
-### GitHub PR comment diagnostics
+### GitHub issue and PR comment diagnostics
 
-The repository ships a separate **read-only** command surface for GitHub PR conversations. It uses ordinary GitHub-hosted Actions runners and requires no local or self-hosted runner. The workflow must first be merged onto the default branch because GitHub dispatches `issue_comment` only when that workflow exists there.
+The repository ships a separate **read-only** command surface for policy-authorized issue and PR conversations. It uses ordinary GitHub-hosted Actions runners and requires no local or self-hosted runner. The workflow must first be merged onto the default branch because GitHub dispatches `issue_comment` only when that workflow exists there.
 
 | Command | Result |
 |---|---|
-| `/help` or `/vibeci help` | Command list, permissions and scope. `/Help` and other casing work too. |
-| `/ci` | Current-head workflow and job status, including assigned runner/group/labels and failed steps. |
-| `/runs` | Up to five recent runs for the PR's exact current head SHA. |
-| `/run <run-id>` | Detailed jobs for one run, rejected if it belongs to another SHA. |
-| `/runners` | Runners actually assigned to current-head jobs; no admin-only runner inventory. |
-| `/failures` | Failed, cancelled or timed-out jobs and failed step names with GitHub links. |
+| `/help` or `/vibeci help` | Command list, authorization, limits and scope. `/Help` and other casing work too. |
+| `/ci [--target default\|pr:<number>]` | Target-bound workflow/job status, assigned runner metadata and failed steps. |
+| `/runs [--target default\|pr:<number>]` | Up to five recent non-command runs for the exact target SHA. |
+| `/run <run-id> [--target default\|pr:<number>]` | Detailed jobs for one run, rejected if its SHA does not match the exact target. |
+| `/runners [--target default\|pr:<number>]` | Runners assigned to target-bound jobs; no admin-only runner inventory. |
+| `/failures [--target default\|pr:<number>]` | Failed, cancelled or timed-out jobs and failed step names with GitHub links. |
 
-Only repository `OWNER`, `MEMBER`, and `COLLABORATOR` comments are handled. Responses are bounded to five current-head runs, 50 latest-attempt jobs per run, and a 24,000-character comment budget; larger matrices stay available through the linked GitHub run. The adapter executes default-branch code, never checks out or runs contributor code, never reads job logs, installs no dependencies, uses no cache, and cannot rerun/cancel jobs. Its token is limited to `actions: read`, `contents: read`, `pull-requests: read`, and `issues: write` so it can read diagnostics and post one bounded response. Comment text is parsed from the event JSON as data and never becomes shell input.
+Automatic targeting uses the current PR head in a PR conversation and the event's exact default-branch SHA in a policy-listed control issue. A trusted actor may select `--target default` or a same-repository PR such as `--target pr:5`; arbitrary refs, branches and comment-supplied SHAs are rejected. The command workflow itself is excluded from run listings so repeated comments cannot immediately displace real CI evidence.
+
+A repository administrator must create the Actions secret `VIBECI_COMMAND_POLICY_JSON`. It is strict JSON with exactly `version`, `trusted_actors` and `control_issues`; each actor needs both the GitHub login and immutable numeric user ID. The policy approved for this repository is:
+
+```json
+{"version":1,"trusted_actors":[{"login":"JONIMONI09","id":125208650}],"control_issues":[4]}
+```
+
+Authorization fails closed unless the repository matches, the event role is `OWNER`, `MEMBER` or `COLLABORATOR`, the event login and user ID exactly match the secret policy, and a normal issue is listed as a control issue. Missing, malformed, duplicate or oversized policy data fails the Action without printing the secret; unauthorized comments receive no bot response. Because Actions secrets cannot be evaluated directly in a job-level `if`, the public role check happens before runner allocation and the exact secret-backed identity check happens in default-branch Python before any metadata read.
+
+Responses scan at most 50 candidate runs, report at most five non-command runs, inspect at most 50 latest-attempt jobs per run, cap each REST response at 2 MiB with a 20-second timeout, and use a 24,000-character comment budget. The adapter checks out the event's exact default-branch SHA, never checks out or runs contributor code, never reads job logs, installs no dependencies, uses no cache, blocks rerun attempts, and cannot start/cancel CI. Its token remains limited to `actions: read`, `contents: read`, `pull-requests: read`, and `issues: write`. Only the Python command step receives the bounded policy secret; comment text and policy fields are parsed as data and never become shell input or checkout refs.
 
 ### Optional tokenless web research
 
@@ -138,7 +148,7 @@ SearXNG must enable its JSON format; many public instances do not. See the dated
 * **tests** – Python 3.11/3.12/3.13 matrix. Installs `requirements.lock` + `requirements-dev.lock` with `--require-hashes --no-deps`, runs `pip check`, byte-compiles all modules, runs the full pytest suite (unit tests, mock-llama-server e2e for both transports and advanced reviewers, agent/worktree/policy tests, regression tests, repository-integrity tests), then dogfoods `python -m vibeci scan --no-llm --fail-on error` on its own commit.
 * **lint** – Ruff with the explicit rule set in `pyproject.toml`, `bash -n` + ShellCheck on `scripts/*.sh`, zizmor with `--strict-collection` over workflows/`action.yml`/`dependabot.yml`, and actionlint v1.7.12 (release tarball verified against its upstream SHA-256) for workflow syntax and expression types.
 
-`.github/workflows/vibeci-commands.yml` is independent from CI execution. After it is present on the default branch, trusted PR comments can query existing run/job/runner/failure metadata; the workflow cannot start, rerun, cancel, approve, or merge anything.
+`.github/workflows/vibeci-commands.yml` is independent from CI execution. After it is present on the default branch and its policy secret is configured, authorized control-issue and PR comments can query existing run/job/runner/failure metadata; the workflow cannot start, rerun, cancel, approve, or merge anything.
 
 All `uses:` references are pinned to full commit SHAs and the jobs pin the `ubuntu-24.04` runner label instead of the moving `ubuntu-latest` (GitHub started migrating that label to Ubuntu 26 in October 2026). The workflow starts from `permissions: {}`, grants `contents: read` per job, uses `persist-credentials: false`, sets job timeouts and a concurrency group. `.github/dependabot.yml` proposes pin updates weekly with a 7-day cooldown. The integrity tests fail if a future edit adds an unpinned action, a dangerous trigger, an expression inside a `run:` block, an unhash-locked requirement, or a stale JSON schema.
 
