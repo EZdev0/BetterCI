@@ -11,7 +11,7 @@ import urllib.request
 from .diffmap import contiguous
 from .gate import apply_replacement, check_patched
 from .llm import LLMClient
-from .models import Finding, Severity, Suggestion
+from .models import Finding, PatchReview, Severity, Suggestion
 from .tools import _read, log
 
 _SEV_RANK = {Severity.error: 0, Severity.warning: 1, Severity.info: 2}
@@ -34,8 +34,34 @@ def _validated(path: str, source: str, start: int, end: int, rep: str, visible: 
     return None if res.ok else res.reason
 
 
-def build_suggestions(findings: list[Finding], diff_map: dict[str, set[int]], client: LLMClient | None,
-                      max_llm: int, budget_s: float, max_total: int = 20) -> list[Suggestion]:
+def aggregate_patch_reviews(
+    reviews: list[PatchReview | None],
+    required: int = 2,
+) -> tuple[bool, str]:
+    """Combine bounded role evidence without majority voting or optimism."""
+    if required < 1 or len(reviews) != required:
+        return False, f"required {required} verifier role passes, received {len(reviews)}"
+    verdicts = [review.verdict if review is not None else "invalid_or_timeout" for review in reviews]
+    if any(review is None or not review.approved for review in reviews):
+        return False, f"verifier role passes rejected or were unavailable: {verdicts}"
+    return (
+        True,
+        f"{required}/{required} read-only verifier role passes approved this patch. "
+        "They used the same configured endpoint/model and are not represented as independent models.",
+    )
+
+
+def build_suggestions(
+    findings: list[Finding],
+    diff_map: dict[str, set[int]],
+    client: LLMClient | None,
+    max_llm: int,
+    budget_s: float,
+    max_total: int = 20,
+    review_mode: str = "standard",
+) -> list[Suggestion]:
+    if review_mode not in {"standard", "advanced"}:
+        raise ValueError("review_mode must be standard or advanced")
     out: list[Suggestion] = []
     findings = sorted(findings, key=lambda f: (_SEV_RANK[f.severity], f.path, f.line))
     # 1) deterministic fixes first: zero hallucination risk, zero LLM time
@@ -48,9 +74,18 @@ def build_suggestions(findings: list[Finding], diff_map: dict[str, set[int]], cl
         if why:
             log(f"drop tool fix {f.tool}/{f.rule} {f.path}:{f.line}: {why}")
             continue
-        s = Suggestion(path=f.path, start_line=f.line, end_line=f.end_line, replacement=f.tool_fix,
-                       title=f.message, detail=f"Deterministic auto-fix from `{f.tool}` ({f.rule}).",
-                       source="tool", rule=f.rule, confidence="high")
+        s = Suggestion(
+            path=f.path,
+            start_line=f.line,
+            end_line=f.end_line,
+            replacement=f.tool_fix,
+            title=f.message,
+            detail=f"Deterministic auto-fix from `{f.tool}` ({f.rule}).",
+            source="tool",
+            rule=f.rule,
+            confidence="high",
+            evidence=[f"{f.tool}/{f.rule}", f"{f.path}:{f.line}-{f.end_line}"],
+        )
         if not any(_overlaps(s, o) for o in out):
             out.append(s)
     # 2) LLM proposals, only for unresolved findings inside the diff, hard-budgeted
@@ -77,12 +112,29 @@ def build_suggestions(findings: list[Finding], diff_map: dict[str, set[int]], cl
             if why:
                 log(f"drop llm fix {f.rule} {f.path}:{prop.start_line}: {why}")
                 continue
+            reviewer_summary = None
+            if review_mode == "advanced":
+                reviews = [client.verify_patch(f, src, prop, deadline) for _ in range(2)]
+                approved, reviewer_summary = aggregate_patch_reviews(reviews)
+                if not approved:
+                    log(f"drop llm fix {f.rule} {f.path}:{prop.start_line}: {reviewer_summary}")
+                    continue
             detail = prop.bug
             if prop.edge_case:
                 detail += f"\n\n**What-if ({prop.edge_case.kind}):** {prop.edge_case.scenario}"
-            s = Suggestion(path=f.path, start_line=prop.start_line, end_line=prop.end_line,
-                           replacement=prop.replacement or "", title=f.message, detail=detail,
-                           source="llm", rule=f.rule, confidence=prop.confidence)
+            s = Suggestion(
+                path=f.path,
+                start_line=prop.start_line,
+                end_line=prop.end_line,
+                replacement=prop.replacement or "",
+                title=f.message,
+                detail=detail,
+                source="llm",
+                rule=f.rule,
+                confidence=prop.confidence,
+                evidence=[f"{f.tool}/{f.rule}", f"{f.path}:{prop.start_line}-{prop.end_line}"],
+                reviewer_summary=reviewer_summary,
+            )
             if not any(_overlaps(s, o) for o in out):
                 out.append(s)
     return out[:max_total]
@@ -99,8 +151,13 @@ def render_body(s: Suggestion) -> str:
     fence = "`" * max(3, max((len(m) for m in re.findall(r"`+", s.replacement)), default=0) + 1)
     rep = s.replacement if s.replacement.endswith("\n") or s.replacement == "" else s.replacement + "\n"
     badge = "🔧 auto-fix" if s.source == "tool" else f"🤖 local model · confidence {s.confidence}"
-    return (f"**VibeCI · `{s.rule}`** · {badge}\n\n{_clean(s.title, 200)}\n\n{_clean(s.detail)}\n\n"
-            f"{fence}suggestion\n{rep}{fence}\n<!-- vibeci:fp={s.fingerprint} -->")
+    evidence = ", ".join(f"`{_clean(item, 160)}`" for item in s.evidence)
+    reviewer = f"\n\n**Verifier role evidence:** {_clean(s.reviewer_summary)}" if s.reviewer_summary else ""
+    return (
+        f"**VibeCI · `{s.rule}`** · {badge}\n\n{_clean(s.title, 200)}\n\n{_clean(s.detail)}"
+        f"\n\n**Evidence:** {evidence}{reviewer}\n\n"
+        f"{fence}suggestion\n{rep}{fence}\n<!-- vibeci:fp={s.fingerprint} -->"
+    )
 
 
 def to_comments(sugs: list[Suggestion]) -> list[dict]:

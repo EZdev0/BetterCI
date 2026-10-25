@@ -1,5 +1,5 @@
 name: VibeCI
-description: Deterministic-first CI triage with a local 7B model. One-click fixes as native GitHub suggestions. No API keys, no data leaves the runner.
+description: Deterministic-first CI triage with an optional local code model, gated fixes and native GitHub suggestions. No API keys, no data leaves the runner.
 author: EZdev0
 branding:
   icon: shield
@@ -18,6 +18,9 @@ inputs:
   transport:
     description: "anthropic = Anthropic SDK against llama-server /v1/messages, grammar = /v1/chat/completions with json_schema"
     default: anthropic
+  review-mode:
+    description: "standard = deterministic gate; advanced = gate plus two read-only verifier role passes for each model-generated patch"
+    default: standard
   max-llm-findings:
     description: "Maximum number of findings sent to the model"
     default: "5"
@@ -105,6 +108,7 @@ runs:
         PROFILE: ${{ inputs.profile }}
         LLM: ${{ inputs.llm }}
         TRANSPORT: ${{ inputs.transport }}
+        REVIEW_MODE: ${{ inputs.review-mode }}
         MAX_LLM: ${{ inputs.max-llm-findings }}
         BUDGET: ${{ inputs.llm-budget-seconds }}
         FAIL_ON: ${{ inputs.fail-on }}
@@ -112,7 +116,7 @@ runs:
       run: |
         set -euo pipefail
         export PATH="$HOME/.vibeci/venv/bin:$PATH" PYTHONPATH="$ACTION_PATH"
-        args=(scan --profile "$PROFILE" --max-llm "$MAX_LLM" --llm-budget "$BUDGET" --transport "$TRANSPORT" --fail-on "$FAIL_ON" --out "$OUT")
+        args=(scan --profile "$PROFILE" --max-llm "$MAX_LLM" --llm-budget "$BUDGET" --transport "$TRANSPORT" --review-mode "$REVIEW_MODE" --fail-on "$FAIL_ON" --out "$OUT")
         if [ "$LLM" = "true" ]; then args+=(--llm-url "http://127.0.0.1:8080"); else args+=(--no-llm); fi
         python -m vibeci "${args[@]}"
 

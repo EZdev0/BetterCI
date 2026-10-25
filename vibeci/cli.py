@@ -6,8 +6,11 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
 from . import __version__, diffmap, tools
+from .agent import AgentController, repository_root
+from .evaluation import evaluate_model
 from .llm import LLMClient
 from .models import Finding, Suggestion, fix_schema
 from .review import build_suggestions, post_review
@@ -39,13 +42,23 @@ def cmd_scan(a: argparse.Namespace) -> int:
             client = LLMClient(a.llm_url, a.transport, a.model, timeout=a.llm_timeout)
         except Exception as exc:  # noqa: BLE001
             log(f"llm disabled: {exc}")
-    sugs = build_suggestions(findings, dm, client, a.max_llm, a.llm_budget)
+    sugs = build_suggestions(
+        findings, dm, client, a.max_llm, a.llm_budget, review_mode=a.review_mode,
+    )
 
     os.makedirs(a.out, exist_ok=True)
     covered = {(s.path, n) for s in sugs for n in range(s.start_line, s.end_line + 1)}
     rest = [f for f in findings if not any((f.path, n) in covered for n in range(f.line, f.end_line + 1))]
     with open(os.path.join(a.out, "review.json"), "w", encoding="utf-8") as fh:
-        json.dump({"version": __version__, "suggestions": [s.model_dump() for s in sugs]}, fh, indent=2)
+        json.dump({
+            "version": __version__,
+            "review_mode": a.review_mode,
+            "reviewer_disclosure": (
+                "advanced uses two role passes on the same configured endpoint/model; they are not independent models"
+                if a.review_mode == "advanced" else "standard deterministic gate"
+            ),
+            "suggestions": [s.model_dump() for s in sugs],
+        }, fh, indent=2)
     with open(os.path.join(a.out, "findings.json"), "w", encoding="utf-8") as fh:
         json.dump([f.model_dump(mode="json") for f in findings], fh, indent=2)
 
@@ -54,6 +67,8 @@ def cmd_scan(a: argparse.Namespace) -> int:
         print(f"::{lvl} file={_esc(f.path, True)},line={f.line},endLine={f.end_line},title={_esc('VibeCI ' + f.rule, True)}::{_esc(f.message)}")
     summary = (f"### VibeCI\n- findings in changed lines: **{len(findings)}**\n- one-click suggestions: **{len(sugs)}** "
                f"({sum(s.source == 'tool' for s in sugs)} deterministic, {sum(s.source == 'llm' for s in sugs)} local model)\n"
+               f"- review mode: **{a.review_mode}**"
+               f"{' (2 verifier role passes on the same local model)' if a.review_mode == 'advanced' else ''}\n"
                f"- runtime: {time.monotonic() - t0:.1f}s\n")
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
@@ -96,6 +111,32 @@ def cmd_schema(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_evaluate_model(a: argparse.Namespace) -> int:
+    client = LLMClient(a.llm_url, a.transport, a.model, timeout=a.llm_timeout)
+    document = evaluate_model(client, a.model, a.out)
+    print(json.dumps(document, indent=2))
+    return 0 if document["passed"] == document["total"] else 1
+
+
+def cmd_agent(a: argparse.Namespace) -> int:
+    root = repository_root(a.repo)
+    planner = None
+    if a.llm_url:
+        try:
+            planner = LLMClient(a.llm_url, a.transport, a.model, timeout=a.llm_timeout)
+        except Exception as exc:  # noqa: BLE001
+            log(f"agent planner unavailable: {exc}")
+            return 2
+    settings = Path(a.settings) if a.settings else root / ".agents/settings.yml"
+    state = Path(a.state) if a.state else None
+    if state is not None and not state.is_absolute():
+        state = root / state
+    controller = AgentController(root, settings_path=settings, state_path=state, planner=planner)
+    result = controller.handle(a.text)
+    print(result.message)
+    return 0 if result.ok else 2
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="vibeci")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -110,6 +151,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--max-llm", type=int, default=5)
     s.add_argument("--llm-budget", type=float, default=150.0)
     s.add_argument("--llm-timeout", type=float, default=120.0)
+    s.add_argument("--review-mode", choices=["standard", "advanced"], default="standard")
     s.add_argument("--out", default="vibeci-out")
     s.add_argument("--fail-on", choices=["none", "error"], default="none")
     s.set_defaults(fn=cmd_scan)
@@ -121,6 +163,23 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--model", default="local")
     d.set_defaults(fn=cmd_doctor)
     sub.add_parser("schema").set_defaults(fn=cmd_schema)
+    e = sub.add_parser("evaluate-model", help="run the live local-model smoke evaluation")
+    e.add_argument("--llm-url", default="http://127.0.0.1:8080")
+    e.add_argument("--transport", choices=["anthropic", "grammar"], default="grammar")
+    e.add_argument("--model", default="local")
+    e.add_argument("--llm-timeout", type=float, default=120.0)
+    e.add_argument("--out", default="vibeci-out/model-evaluation.json")
+    e.set_defaults(fn=cmd_evaluate_model)
+    g = sub.add_parser("agent", help="parse a safe slash command using .agents policy")
+    g.add_argument("--text", required=True, help="quoted slash command, for example '/help'")
+    g.add_argument("--repo", default=".")
+    g.add_argument("--settings", default="")
+    g.add_argument("--state", default="")
+    g.add_argument("--llm-url", default="")
+    g.add_argument("--transport", choices=["anthropic", "grammar"], default="grammar")
+    g.add_argument("--model", default="local")
+    g.add_argument("--llm-timeout", type=float, default=120.0)
+    g.set_defaults(fn=cmd_agent)
     a = p.parse_args(argv)
     return a.fn(a)
 

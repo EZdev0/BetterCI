@@ -152,3 +152,48 @@ def test_no_llm_mode_is_deterministic(repo):
     cli.main(["scan", "--base", "HEAD~1", "--no-llm", "--out", "out"])
     sugs = _suggestions()
     assert sugs and all(s["source"] == "tool" for s in sugs)
+
+
+def test_advanced_mode_requires_two_schema_valid_verifier_role_passes(repo):
+    srv, url = mock_llm.start()
+    mock_llm.REPLY["value"] = {
+        "propose_fix": GOOD,
+        "verify_patch": {
+            "verdict": "approve",
+            "goal_satisfied": True,
+            "behavior_preserved": True,
+            "finding_resolved": True,
+            "new_risk": "none",
+            "reason": "The context manager closes the file on every exit path.",
+            "evidence": ["ruff/SIM115", "app.py:6-7"],
+        },
+    }
+    rc = cli.main([
+        "scan", "--base", "HEAD~1", "--llm-url", url, "--review-mode", "advanced", "--out", "out",
+    ])
+    assert rc == 0
+    suggestion = next(item for item in _suggestions() if item["source"] == "llm")
+    assert "2/2" in suggestion["reviewer_summary"]
+    verifier_calls = [body for path, body in mock_llm.SEEN
+                      if path == "/v1/messages" and body.get("tool_choice", {}).get("name") == "verify_patch"]
+    assert len(verifier_calls) >= 2
+    srv.shutdown()
+
+
+def test_advanced_mode_drops_patch_when_verifier_rejects(repo):
+    srv, url = mock_llm.start()
+    mock_llm.REPLY["value"] = {
+        "propose_fix": GOOD,
+        "verify_patch": {
+            "verdict": "reject",
+            "goal_satisfied": False,
+            "behavior_preserved": False,
+            "finding_resolved": True,
+            "new_risk": "unknown",
+            "reason": "Behavior preservation is not supported by the shown evidence.",
+            "evidence": ["app.py:6-7"],
+        },
+    }
+    cli.main(["scan", "--base", "HEAD~1", "--llm-url", url, "--review-mode", "advanced", "--out", "out"])
+    assert not any(item["source"] == "llm" for item in _suggestions())
+    srv.shutdown()

@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
-## [Unreleased] — 2026-10-24
+## [Unreleased] — 2026-10-25
 
 ### Added
 
@@ -10,10 +10,17 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - `.github/dependabot.yml` for weekly action-pin updates with a 7-day cooldown.
 - `requirements-dev.in` / `requirements-dev.lock`: hash-locked pytest dependencies.
 - `pyproject.toml` with an explicit Ruff rule set, so lint results do not depend on Ruff's changing defaults.
-- `tests/test_regressions.py` and `tests/test_repo_integrity.py` (32 tests total).
+- Regression, repository-integrity, agent/parser/worktree and advanced-review coverage (53 tests total).
 - `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md` and `.gitignore`.
 - English-only documentation; `docs/RESEARCH.md` translated from German.
-- Error tracking in Linear (team `PRO`, project "BetterCI (VibeCI) - CI Hardening & Error Tracking"), mirrored in `docs/ERRORS.md`. Every error records how it happened, its root cause, the solution path and the regression test. Vercel was a misunderstanding: it is not connected and this is a GitHub Action, not a Vercel deployment.
+- Error tracking in Linear (team `PRO`, project "BetterCI (VibeCI) - CI Hardening & Error Tracking"), mirrored in `docs/ERRORS.md`. Every error records how it happened, its root cause, the solution path and the regression test.
+- `AGENTS.md` and `.agents/`: mandatory policy reading order, role contracts, machine-readable safety settings and a documented slash-command lifecycle.
+- Goal/plan/approval controller with immutable digests, schema/path/reference validation and ignored local state.
+- Per-task Git branches/worktrees, marker-validated restore, deletion/path/language/suspicious-code guards and reviewed verification commands.
+- Advanced review mode with two read-only verifier role passes and explicit same-model disclosure.
+- `python -m vibeci evaluate-model`, a live local-model smoke harness that records raw JSON without fabricated scores.
+- Pinned `qwen2.5-coder-3b-fast` candidate; 7B remains default pending identical-runner measurements.
+- Root `RESEARCH.md` (dated primary-source access log) and `FUTURE.md` (shipped-versus-planned capability ledger).
 
 ### Fixed
 
@@ -25,6 +32,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - PR-controlled text could escape the old `<code>` prompt wrapper; prompts now use a per-request random untrusted-data marker.
 - `cmd_post` crashed when no `review.json` existed.
 - The README development command was invalid under `--require-hashes`.
+- Generated patches could remove a large portion of a file without a dedicated truncation threshold; the gate now rejects emptied/excessively shortened files.
+- Suspicious generated additions could receive a one-click fix; they now become report-only findings.
 
 ### Changed
 

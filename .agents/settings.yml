@@ -1,0 +1,90 @@
+version: 1
+repository_language: English
+default_mode: standard
+
+state:
+  directory: .vibeci
+  file: .vibeci/agent-state.json
+  worktrees: .vibeci/worktrees
+  branch_prefix: vibeci/task-
+
+goal:
+  required: true
+  minimum_acceptance_criteria: 1
+  minimum_references: 1
+  maximum_objective_chars: 500
+  maximum_criterion_chars: 300
+
+approval:
+  required_before_writes: true
+  commands:
+    - /approve
+    - /ok
+  plan_digest: sha256
+
+changes:
+  forbid_file_deletion: true
+  forbid_renames: true
+  maximum_deleted_lines_per_file: 80
+  maximum_deletion_ratio: 0.35
+  maximum_changed_files: 40
+  maximum_added_file_bytes: 300000
+  require_planned_paths: true
+  require_english_documentation: true
+  protected_paths:
+    - .git
+    - .github/workflows
+    - .agents/settings.yml
+    - requirements.lock
+    - requirements-dev.lock
+    - tools.lock.json
+  report_only_risk_patterns:
+    - "curl ... | shell"
+    - "wget ... | shell"
+    - "dynamic eval/exec"
+    - "credential or token exfiltration"
+    - "recursive destructive delete"
+    - "workflow secret exposure"
+
+agents:
+  maximum_attempts_per_agent: 2
+  maximum_parallel_workers: 3
+  minimum_advanced_approvals: 2
+  require_final_judge: true
+  stop_on:
+    - invalid_schema_twice
+    - timeout
+    - budget_exhausted
+    - policy_violation
+    - repeated_unsupported_claim
+
+verification:
+  timeout_seconds_per_command: 180
+  commands:
+    - [python, -m, compileall, -q, vibeci, tests]
+    - [python, -m, ruff, check, .]
+    - [python, -m, pytest, -q, tests]
+  require_clean_schema_sync: true
+  require_documentation_for_architecture_changes: true
+
+providers:
+  local:
+    enabled: true
+    priority: 1
+    transport: loopback_only
+  claude:
+    enabled: false
+    reason: No tested provider adapter or repository secret policy is shipped.
+  gemini:
+    enabled: false
+    reason: No tested provider adapter or repository secret policy is shipped.
+  jules:
+    enabled: false
+    reason: No tested provider adapter or repository secret policy is shipped.
+
+schedules:
+  enabled: false
+  reason: Schedule proposals require a reviewed workflow change; agents cannot silently create recurring jobs.
+  allowlisted_commands:
+    - /verify
+    - /status

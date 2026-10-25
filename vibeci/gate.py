@@ -11,6 +11,7 @@ the total stayed the same.
 from __future__ import annotations
 
 import ast
+import difflib
 import json
 import os
 import shutil
@@ -18,6 +19,8 @@ import subprocess
 import tempfile
 from collections import Counter
 from dataclasses import dataclass
+
+from .policy import suspicious_added_lines
 
 
 @dataclass
@@ -105,6 +108,27 @@ def check_patched(path: str, original: str, patched: str) -> GateResult:
         return GateResult(False, "patch is a no-op")
     if len(patched) > 400_000:
         return GateResult(False, "file too large for gate")
+    original_lines = original.splitlines()
+    patched_lines = patched.splitlines()
+    before_lines = len(original_lines)
+    deleted = sum(
+        old_end - old_start
+        for operation, old_start, old_end, _new_start, _new_end in difflib.SequenceMatcher(
+            a=original_lines, b=patched_lines, autojunk=False,
+        ).get_opcodes()
+        if operation in {"delete", "replace"}
+    )
+    if original.strip() and not patched.strip():
+        return GateResult(False, "patch would empty an existing file")
+    if deleted > 80 or (before_lines >= 20 and deleted / before_lines > 0.35):
+        return GateResult(False, f"excessive line deletion: removed {deleted} of {before_lines} lines")
+    patch = "".join(difflib.unified_diff(
+        original.splitlines(keepends=True), patched.splitlines(keepends=True),
+        fromfile=f"a/{path}", tofile=f"b/{path}",
+    ))
+    risks = suspicious_added_lines(patch)
+    if risks:
+        return GateResult(False, f"security report only: {risks[0].code}; no generated fix")
     ext = os.path.splitext(path)[1].lower()
 
     if ext in (".py", ".pyi"):

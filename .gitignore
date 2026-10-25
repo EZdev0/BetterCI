@@ -9,3 +9,10 @@ vibeci-out/
 .coverage
 htmlcov/
 *.egg-info/
+
+# Local agent runtime state. Policies in .agents/ stay tracked; mutable state,
+# prompts, provider output, logs and per-task Git worktrees never enter commits.
+.vibeci/
+.vibeci-worktree.json
+.agents/local/
+*.agent.log

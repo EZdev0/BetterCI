@@ -4,7 +4,7 @@ Tracked defects found during the 2026-10-24 CI audit. Status is derived from cod
 
 **Error tracking rule:** every error records *how it happened* (reproduction/observation + root cause) and the *solution path* (fix, why it was chosen, regression test). No invented data.
 
-**Linear:** team `PRO`, project **"BetterCI (VibeCI) - CI Hardening & Error Tracking"**. Issues `PRO-43` to `PRO-50` mirror E-01, E-03 to E-09 below, each with the sections "How it happened", "Root cause", "Solution path" and "Regression test". Example: https://linear.app/projects01/issue/PRO-43/e-01-high-patch-gate-accepted-patches-that-introduced-a-new-lint-rule
+**Linear:** team `PRO`, project **"BetterCI (VibeCI) - CI Hardening & Error Tracking"**. Issues `PRO-43` to `PRO-50` mirror E-01 and E-03 to E-09 below. The agent-system findings are tracked as [E-10 / PRO-51](https://linear.app/projects01/issue/PRO-51/e-10-high-generated-patch-could-truncate-most-of-a-file), [E-11 / PRO-53](https://linear.app/projects01/issue/PRO-53/e-11-high-agent-workers-lacked-isolated-recovery-state), [E-12 / PRO-54](https://linear.app/projects01/issue/PRO-54/e-12-high-security-sensitive-generated-additions-needed-report-only), and [E-13 / PRO-52](https://linear.app/projects01/issue/PRO-52/e-13-medium-planner-output-was-not-grounded-to-repository-evidence). Every issue uses the sections "How it happened", "Root cause", "Solution path", and "Regression test".
 
 | ID | Severity | Component | How it happened | Root cause | Solution path | Regression test |
 |---|---|---|---|---|---|---|
@@ -17,6 +17,10 @@ Tracked defects found during the 2026-10-24 CI audit. Status is derived from cod
 | E-07 | Medium | Dev setup | `pip install --require-hashes --no-deps -r requirements.lock pytest` exited 1 | `pytest` had no hash | Separate hash-locked `requirements-dev.lock` | `test_lock_files_hash_every_pinned_package` |
 | E-08 | Medium | `vibeci/cli.py` | `post` raised `FileNotFoundError` when no `review.json` existed | Missing output was not handled | Log and return 0 | covered by the integration suite |
 | E-09 | Low | Repository | No CI workflow, no explicit Ruff config, no contributor/security docs, mixed-language documentation | Repository was an unvalidated alpha | `.github/workflows/ci.yml`, `pyproject.toml`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`, English-only docs | `test_workflows_are_least_privilege_bounded_and_injection_safe`, `test_committed_fix_schema_matches_pydantic_model` |
+| E-10 | High | `vibeci/gate.py` | A schema-valid generated replacement could remove most or all lines while still parsing | The gate checked syntax/no-regression but had no explicit file-retention invariant | Reject empty files, more than 80 deleted lines, or over 35% line loss in files with at least 20 lines | `test_gate_rejects_file_truncation_and_suspicious_generated_code` |
+| E-11 | High | Agent task execution | Multiple workers could share one checkout and a failed worker had no bounded restore target | There was no goal/approval state or managed worktree identity | Immutable goal/plan IDs, clean baseline SHA, one branch/worktree per task attempt and marker-validated restore that preserves untracked files | `test_each_task_gets_isolated_worktree_and_restore_preserves_untracked_files` |
+| E-12 | High | Generated security-sensitive changes | Suspicious additions such as dynamic execution could pass syntax checks and receive a one-click suggestion | Correct syntax is not evidence that newly introduced execution behavior is safe | Detect bounded high-risk added-line patterns and switch to report-only human security review | `test_policy_switches_suspicious_code_to_report_only`, `test_gate_rejects_file_truncation_and_suspicious_generated_code` |
+| E-13 | Medium | Planner/model evidence | A free-form plan could cite missing files, omit goal criteria or use unrelated references | Structured shape alone does not prove repository grounding | Require complete goal criteria/references; validate tracked/new/documentation paths, goal ID, dependency order and task evidence again before approval | `test_planner_rejects_hallucinated_paths`, `test_plan_must_cover_goal_criteria_and_documentation_scope`, `test_approval_revalidates_plan_against_current_clean_commit` |
 
 ## Tracking gap
 
@@ -27,7 +31,4 @@ The Linear issue for **E-02** could not be created: the Linear connector's provi
 - zizmor 1.30.1 reports every available fix as `unsafe` — see E-04. Behaviour may change in a future release; the regression test will catch it.
 - GitHub started migrating the `ubuntu-latest` label to Ubuntu 26 in October 2026. CI pins `ubuntu-24.04`.
 - The 4.7 GB GGUF model hash could not be re-downloaded in the audit environment; `scripts/fetch-model.sh` verifies it at runtime.
-
-## Vercel
-
-Vercel was a misunderstanding in the original request: error tracking is done in **Linear** (see above), not Vercel. The Vercel connector is not connected in this workspace, and BetterCI is a GitHub Action rather than a Vercel-deployed web app, so no Vercel project, deployment or error data exists. Nothing was invented. See `SECURITY.md` for the private reporting path.
+- The 1.93 GB 3B fast candidate is pinned from its file-page revision/hash but was not downloaded in this environment; `evaluate-model` exists to record a real comparison later.

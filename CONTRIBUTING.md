@@ -2,6 +2,8 @@
 
 All documentation, comments and commit messages in this repository are in **English**.
 
+Before analysis or edits, read [`AGENTS.md`](AGENTS.md), [`.agents/README.md`](.agents/README.md) and [`.agents/settings.yml`](.agents/settings.yml). These rules apply to human contributors and every AI/provider. Runtime state belongs in ignored `.vibeci/`, never in a commit.
+
 ## Setup
 
 ```bash
@@ -44,6 +46,9 @@ Never invent data. If a tracking tool rejects or is missing an entry, record the
 - Schema changes must be regenerated with `python -m vibeci schema > schemas/fix.schema.json`; `tests/test_repo_integrity.py` fails when the committed schema drifts from the Pydantic model.
 - Add a regression test for every bug you fix. Tests must not mock the behaviour they assert.
 - Do not weaken the patch gate in `vibeci/gate.py`: a suggested patch may never introduce a new lint, ShellCheck or compiler rule.
+- Agent changes need parser, policy and managed-worktree tests. Never test restore/reset behavior in a user's controller worktree.
+- Any web research or time-sensitive provider/model claim must be appended to root `RESEARCH.md` with access date, primary URL, confidence and the decision it informed.
+- Future/provider names belong in `FUTURE.md` until a real adapter, cancellation path, secret policy and integration test exist.
 
 ## Adding a scanner
 

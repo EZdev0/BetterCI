@@ -1,6 +1,8 @@
 # Architecture
 
-```
+## Standard pull-request review
+
+```text
 PR diff ──> diffmap (visible RIGHT-side lines)
    │
    ├─> L1 zizmor (+ --fix=all on scratch copy) ──┐
@@ -10,28 +12,106 @@ PR diff ──> diffmap (visible RIGHT-side lines)
                 │
    tool_fix? ───┴─> gate ──> Suggestion (source=tool, no model)
    no fix + rule in LLM_RULES + budget left
-                └─> llama-server (127.0.0.1) ─> FixProposal (schema) ─> window/format checks ─> gate ──> Suggestion (source=llm)
-                                                                                    │
-                       review.json ─> post (pull-requests: write, same-repo PRs) ─> ```suggestion blocks
+                └─> llama-server (127.0.0.1) ─> FixProposal (schema)
+                      ─> window/format checks ─> gate ─> [advanced: verifier role x2] ─> Suggestion
+                                                                                         │
+                       review.json ─> post (pull-requests: write, same-repo PRs) ─> suggestion blocks
 ```
 
+**Standard mode** stops after the deterministic gate. **Advanced mode** adds two read-only verifier role calls for model-generated patches. Both calls use the configured endpoint/model unless a future provider adapter says otherwise; the report discloses this and never calls them independent models.
+
+## Advanced task control plane
+
+```text
+AGENTS.md + .agents/settings.yml
+       │
+/goal (criteria + references) ─> GoalSpec + goal digest
+       │
+/plan ─> loopback planner ─> PlanProposal schema ─> path/reference/dependency validation
+       │
+/approve <plan digest> + clean baseline SHA
+       │
+/start <task> ─> dedicated branch + .vibeci/worktrees/<goal>-<task>-<attempt>
+       │
+worker edits only approved paths
+       │
+/verify <task> ─> change policy ─> reviewed argv checks ─> evidence ─> human
+       │ failure                                                   │ success
+/restore tracked files; preserve untracked                        later PR
+```
+
+`vibeci.agent` is a deterministic controller, not a free-form shell agent; fail-closed token/goal parsing and plan grounding are isolated in `vibeci.agent_parser`. The optional model may propose `PlanProposal`; Python validates every existing path against `git ls-files`, new path safety, documentation scope, complete goal criteria/references, ordered dependencies and the current goal ID. Approval revalidates the plan and binds its SHA-256 digest to a clean baseline. Runtime state, model logs and worktrees are ignored by Git. Dependency status controls ordering only: every attempt still starts from the approved baseline because judge-controlled task-commit integration is not shipped.
+
+The shipped controller intentionally does **not** execute Claude, Gemini, Jules or arbitrary provider CLIs. `.agents/settings.yml` marks these adapters disabled until a real tested adapter, cancellation path and secret policy exist. See [`FUTURE.md`](../FUTURE.md).
+
+## Change policy
+
+Before reviewed test commands or a model verdict, `vibeci.policy` rejects:
+
+- tracked file deletion or rename;
+- a path outside the approved task;
+- `.git`, workflows, lockfiles or agent-policy changes by a worker;
+- too many files, oversized new files, excessive line loss or an emptied file;
+- symlink/path escapes;
+- clearly non-English repository documentation;
+- suspicious newly added patterns such as pipe-to-shell, destructive recursive deletion, dynamic `eval`/`exec`, world-writable permissions or token/network combinations.
+
+A suspicious-code match switches the result to **report-only**: no generated one-click fix is emitted. It is a triage signal, not proof of malicious intent; a human security review decides.
+
+`/verify` then runs only the literal argv arrays reviewed in `.agents/settings.yml`. No model text is evaluated as shell. A deterministic failure cannot be overruled by reviewer votes or a final judge.
+
+## Restoration and stopping
+
+Every task attempt has its own branch and linked Git worktree. `/restore` checks that:
+
+1. the path is below the configured managed-worktree directory;
+2. `.vibeci-worktree.json` matches the task, plan, branch and baseline;
+3. the checked-out branch has the configured agent prefix; and
+4. the worktree root is exactly the recorded path.
+
+Only then does it run `git reset --hard <baseline>` **inside that worker worktree**. It never runs `git clean`; untracked user files remain. It never resets the controller worktree, rewrites a shared branch, pushes or merges. `/stop` records the ID and prevents a stopped task attempt from being verified; durable process cancellation is still future work because the current controller does not launch provider processes.
+
 ## Trust boundaries
-- PR content is untrusted input to the model: wrapped in a per-request random `VIBECI_UNTRUSTED_*` marker block (so PR text cannot forge the end of the data block), model has no tools, output only via schema.
-- Model output is untrusted too: Pydantic validation, window check, line-number-prefix and fence check, gate, HTML/@-mention stripping, dynamic code-fence length.
-- No-regression is per rule code: a patch that removes one F401 but adds one S110 is rejected even though the total finding count stayed flat.
-- Supply chain: hash-locked Python deps (`requirements.lock` + `requirements-dev.lock`), SHA-256 for the llama.cpp **archive on every run** (extracted binaries are rebuilt from it, so a poisoned cache cannot execute), SHA-256 for the model (commit-pinned URL), full-SHA pins for third-party actions. Mismatch = fail closed.
-- The LLM client refuses any non-loopback URL.
+
+- PR, issue, goal, source and comment content is untrusted input: model prompts wrap it in a per-request random `VIBECI_UNTRUSTED_*` marker block so the input cannot forge the end marker.
+- Models have no tools in the standard scan path and output only through strict Pydantic/JSON schemas.
+- Model output is untrusted: Pydantic validation, window check, line-prefix/fence check, evidence allowlist, patch gate, HTML/@-mention stripping and dynamic code-fence length.
+- No-regression is per rule code: a patch removing F401 but adding S110 is rejected even when total count stays flat.
+- Model plans are proposals: stale goal IDs, hallucinated tracked paths, unsafe new paths, invalid dependency order and unsupported evidence references fail closed.
+- Supply chain: hash-locked Python dependencies, SHA-256 for the llama.cpp archive on every run, extracted binaries rebuilt from the verified archive, commit-pinned model URL + SHA-256, and full-SHA third-party action pins. Mismatch means failure.
+- The LLM client refuses non-loopback URLs. Optional cloud providers are not silently enabled.
+- Human approval is required before advanced writes; human merge remains mandatory.
 
 ## Grammar vs. correctness
-A GBNF/JSON-schema grammar guarantees syntax only. It cannot stop a model from proposing a wrong but well-formed patch. That is the job of the gate and of the 1-click human review.
+
+A GBNF/JSON-schema grammar guarantees syntax only. It cannot stop a model from proposing a wrong but well-formed patch. Correctness evidence comes from the deterministic gate, reviewed verification commands, bounded role review and human review. Two calls to one local model are correlated and never described as two independent AIs.
+
+## Model profiles
+
+- `qwen2.5-coder-7b` Q4_K_M remains the default quality profile.
+- `qwen2.5-coder-3b-fast` Q4_K_M is an opt-in 1.93 GB fast candidate.
+- `python -m vibeci evaluate-model` runs three live schema/gate/semantic smoke cases and records JSON. It is deliberately called a smoke evaluation, not a repository-scale benchmark.
+- The default changes only after both candidates run cold and warm on identical runner images with committed raw results.
 
 ## Cache
-`~/.vibeci` (venv, llama.cpp archive + extracted build, model) is one `actions/cache` entry keyed by the hash of both lock files. Default cache quota is 10 GB per repo (larger on paid quota since 2025-11), entries unused for 7 days are evicted; a ~4.7 GB model fits once. Model and llama.cpp archive are re-hashed after restore; the extracted build is recreated from the verified archive on every run.
+
+`~/.vibeci` (venv, llama.cpp archive + extracted build, model) is one `actions/cache` entry keyed by both lockfiles and model. Default cache quota and retention can change; consult the dated source in `RESEARCH.md`. Model and llama.cpp archives are re-hashed after restore; the extracted build is recreated from the verified archive on every run.
+
+## GitHub PRs, issues and schedules
+
+Standard scans already expose findings through PR annotations, reviews, the job summary and the `vibeci-review` JSON artifact. The slash parser is currently local/durable-state only. A privileged `issue_comment` executor is deliberately **not** shipped yet: GitHub comment events run default-branch code with write-capable issue/PR permissions, GitHub-hosted runners are ephemeral, and low-trust caches need special handling. `FUTURE.md` lists the requirements for a safe adapter.
+
+`/schedule` therefore validates and records only a proposal for `/verify` or `/status`; it never writes workflow YAML. GitHub schedules use the latest default-branch commit, may be delayed or dropped, and are not a persistent exact-time daemon. Exact limits and the accessed official URL are in `RESEARCH.md`.
 
 ## Fork PRs
-Add a second workflow triggered by `workflow_run` on VibeCI completion that downloads the `vibeci-review` artifact and runs `python -m vibeci post`. Never use `pull_request_target` to check out and run PR code.
 
-## Known limits (v0.1)
-- Not yet run against a real model in CI: the e2e tests use a mock llama-server speaking the Anthropic and OpenAI shapes. Run `vibeci doctor` and the manual benchmark commands in `README.md` first.
-- `anthropic` transport relies on llama-server honoring forced tool choice; `doctor` probes it. If it fails, use `transport: grammar`.
-- Trivy runs outside the fast path (DB download); the parser exists, the pinned install step is on the roadmap.
+A future second workflow may be triggered by `workflow_run` to download a review artifact and post results, but it must never check out or execute untrusted PR code in the privileged job. Do not use `pull_request_target` as a shortcut.
+
+## Known limits
+
+- A real GGUF was not downloaded in this change. Protocol tests use a mock llama-server; model quality remains unmeasured here.
+- The 3B file is pinned but is not the default until comparative runner evidence exists.
+- Advanced verifier roles currently share one local endpoint/model; this is extra scrutiny, not model independence.
+- The task controller creates/restores worktrees and verifies changes but does not launch a coding-provider process or integrate task commits. Provider execution and judge-controlled integration remain explicitly unshipped.
+- `anthropic` transport depends on llama-server honoring forced tool choice; `doctor` probes it. Use `grammar` if it fails.
+- Trivy runs outside the fast path; its SARIF parser exists, while a pinned install step remains future work.

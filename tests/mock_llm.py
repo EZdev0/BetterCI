@@ -27,11 +27,17 @@ class H(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         SEEN.append((self.path, body))
         if self.path == "/v1/messages":
+            tool_name = body.get("tool_choice", {}).get("name", "propose_fix")
+        else:
+            tool_name = body.get("response_format", {}).get("json_schema", {}).get("name", "propose_fix")
+        configured = REPLY["value"]
+        value = configured.get(tool_name, configured) if isinstance(configured, dict) else configured
+        if self.path == "/v1/messages":
             self._send({"id": "m", "type": "message", "role": "assistant", "model": "local", "stop_reason": "tool_use",
                         "stop_sequence": None, "usage": {"input_tokens": 1, "output_tokens": 1},
-                        "content": [{"type": "tool_use", "id": "t1", "name": "propose_fix", "input": REPLY["value"]}]})
+                        "content": [{"type": "tool_use", "id": "t1", "name": tool_name, "input": value}]})
         else:
-            self._send({"choices": [{"message": {"role": "assistant", "content": json.dumps(REPLY["value"])}}]})
+            self._send({"choices": [{"message": {"role": "assistant", "content": json.dumps(value)}}]})
 
 
 def start():

@@ -17,6 +17,11 @@ VibeCI runs on untrusted pull-request content and has access to a `GITHUB_TOKEN`
 - **The LLM endpoint is loopback-only.** `LLMClient` rejects any non-`127.0.0.1`/`localhost` URL, so source code cannot leave the runner.
 - **Supply chain.** All third-party actions are pinned to full commit SHAs. `requirements.lock` and `requirements-dev.lock` are installed with `--require-hashes --no-deps`. The llama.cpp archive is SHA-256-verified on every run and its binaries are re-extracted from the verified archive; the GGUF model is hash-verified by `scripts/fetch-model.sh`. A mismatch fails closed.
 - **Least privilege.** Workflows declare `permissions: {}` at the top level and grant `contents: read` per job. Checkouts use `persist-credentials: false`. `pull_request_target` is not used; fork PRs get a read-only token and suggestions stay in annotations and the job summary.
+- **Advanced writes need scoped approval.** A goal needs acceptance criteria and evidence references; the plan digest and clean baseline commit are approved before a task worktree is created. Model text cannot approve itself.
+- **Worker isolation and recovery.** Each attempt uses a dedicated branch/worktree. Protected/unplanned paths, file deletion/rename, excessive line loss, symlink escapes, non-English docs and suspicious added code fail closed. Restore is marker/branch/path checked, resets only tracked files in the worker worktree and never runs `git clean`.
+- **Suspicious code is report-only.** Pattern matches are triage signals and never receive a generated fix. A human determines whether the code is malicious or legitimate.
+- **No hidden provider escalation.** Claude, Gemini and Jules adapters are disabled in `.agents/settings.yml`; no missing local model can silently send code to a cloud service. Advanced role calls disclose when they share one endpoint/model.
+- **No privileged comment runner yet.** Slash commands are local until durable state, author authorization, cache restrictions and ephemeral-runner restoration have a tested design. This avoids executing contributor-controlled input with issue/PR write permissions.
 
 ## Out of scope
 

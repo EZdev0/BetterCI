@@ -11,6 +11,12 @@
       "revision": "edafdf364bf87b6bcaf18bf8f7ab1c0c15ae9142",
       "file": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
       "sha256": "1664fccab734674a50763490a8c6931b70e3f2f8ec10031b54806d30e5f956b6"
+    },
+    "qwen2.5-coder-3b-fast": {
+      "repo": "bartowski/Qwen2.5-Coder-3B-Instruct-GGUF",
+      "revision": "5b6d7b621cc8a18153323af1d96171ba0a8c4176",
+      "file": "Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf",
+      "sha256": "840490b3171b3e402c35bb488b1c4de1e69efd9a28c10b8b66e05c19ca041514"
     }
   }
 }
