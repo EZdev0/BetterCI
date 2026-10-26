@@ -24,9 +24,13 @@ This file separates shipped behavior from planned work. A checkbox is completed 
 - [x] Review-post permission failures produce failing GitHub annotations and link the official least-privilege token guide.
 - [x] Disabled-by-default tokenless SearXNG JSON search and allowlisted direct text fetch with strict URL/time/byte/result/no-redirect controls.
 - [x] Least-privilege, read-only GitHub issue/PR diagnostics for help, exact target CI, runs, assigned runners and failed steps. The adapter executes an exact default-branch event SHA, combines dual repository-role checks with a secret-backed login/user-ID/control-issue allowlist, supports only default/same-repository-PR targets and never checks out contributor code.
+- [x] Resource-specific comment-response jobs: normal Issues receive only `issues: write`, PR conversations receive only `pull-requests: write`, and GitHub help distinguishes diagnostics from the complete local-only lifecycle. Known local-only comment commands fail with an actionable availability response instead of silence.
 
 ## Next — required before stateful or autonomous execution from GitHub comments
 
+This is the second stage of `COMMAND-SURFACE-RECOVERY-v1`. The permission/help recovery ships first because it changes only diagnostic response delivery. Stateful execution follows in a separate reviewed change so its broader state, worker and repository-write boundaries cannot be hidden inside a comment-permission hotfix.
+
+- [ ] Define the exact GitHub-hosted meaning of `/start`: an approved task may run only through a real configured worker adapter, on an isolated bot branch, with deterministic verification and a human-merged PR. It must never claim execution when no adapter is configured.
 - [ ] Persist signed/validated agent state for PR and issue comments without trusting user-edited comments.
 - [ ] Add a stateful `/vibeci` command adapter only after it can preserve approval/worktree/recovery semantics across ephemeral GitHub-hosted jobs. The shipped comment adapter is diagnostics-only.
 - [ ] Convert an approved plan into linked Linear/GitHub tasks idempotently.

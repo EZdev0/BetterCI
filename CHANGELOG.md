@@ -10,7 +10,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - `.github/dependabot.yml` for weekly action-pin updates with a 7-day cooldown.
 - `requirements-dev.in` / `requirements-dev.lock`: hash-locked pytest dependencies.
 - `pyproject.toml` with an explicit Ruff rule set, so lint results do not depend on Ruff's changing defaults.
-- Regression, repository-integrity, agent/parser/worktree, Big Brain/context/research, advanced-review and GitHub comment-diagnostic coverage (95 tests total).
+- Regression, repository-integrity, agent/parser/worktree, Big Brain/context/research, advanced-review and GitHub comment-diagnostic coverage (98 tests total).
 - `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md` and `.gitignore`.
 - English-only documentation; `docs/RESEARCH.md` translated from German.
 - Error tracking in Linear (team `PRO`, project "BetterCI (VibeCI) - CI Hardening & Error Tracking"), mirrored in `docs/ERRORS.md`. Every error records how it happened, its root cause, the solution path and the regression test.
@@ -42,6 +42,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - Documented pytest commands invoked the venv interpreter without putting venv tools on `PATH`, causing subprocess-based scanner tests to skip/fail; local commands now expose the hash-locked tool directory.
 - `/help` and `/Help` in GitHub PR comments had no effect because only the local parser existed while documentation implied a GitHub surface; a read-only, role-gated comment adapter now returns help and CI/runner/failure diagnostics.
 - Trusted commands in normal GitHub issues always produced a skipped job because both the workflow and Python handler required a pull-request marker. Policy-listed control issues now use the exact default-branch event SHA, while safe `default`/same-repository-PR target selection and command-workflow filtering preserve bounded, relevant CI results.
+- Authorized diagnostic responses in PR conversations failed with HTTP 403 because the shared command job had `issues: write` but only `pull-requests: read`. Issue and PR events now select mutually exclusive jobs with their matching write scope.
+- Known local-only commands such as `/start` were silently ignored in GitHub comments and `/help` did not enumerate the full command inventory or explain runtime availability. Help now distinguishes inspection commands from the local lifecycle, and authorized local-only command attempts receive a bounded actionable response.
 
 ### Changed
 

@@ -34,6 +34,9 @@ GOAL -> TRIAGE/QUESTIONS -> PLAN -> HUMAN APPROVAL -> ISOLATED WORKTREE -> IMPLE
 - Model output is a hypothesis. Schemas constrain syntax; deterministic evidence establishes acceptance.
 - Claims cite a path/rule/commit/URL. Missing evidence is reported as `unknown`, never invented.
 - Cloud providers are opt-in and disabled unless a concrete, tested adapter and secret policy exist.
+- Command documentation must distinguish shipped GitHub-hosted behavior from local-only control-plane behavior. In particular, `/run` inspects an existing Actions run, while local `/start` creates an isolated worktree and does not launch a coding provider.
+- Policy-authorized GitHub comments that use a known local-only command receive a bounded availability response instead of being silently ignored. Unrelated slash commands remain silent.
+- Issue and pull-request response jobs use separate least-privilege write scopes: `issues: write` only for normal-Issue responses and `pull-requests: write` only for PR-conversation responses.
 - Stop a reviewer after two invalid schema responses, a timeout, policy breach, repeated unsupported claims, or its configured budget. Stopping one reviewer cannot weaken the required approval count.
 
 ## Modes

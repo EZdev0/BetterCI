@@ -11,6 +11,7 @@ import yaml
 from vibeci import agent_parser
 from vibeci.agent import AgentController
 from vibeci.evaluation import evaluate_model
+from vibeci.github_policy import LOCAL_ONLY_COMMAND_NAMES
 from vibeci.models import FixProposal, GoalSpec, PlanProposal, PlanTask
 from vibeci.policy import documentation_language_issue, evaluate_changes, validate_cron
 from vibeci.settings import load_settings
@@ -117,13 +118,25 @@ def _planned_controller(tmp_path: Path, planner=None):
     return controller
 
 
+def test_github_local_only_inventory_matches_agent_handlers():
+    handlers = {
+        name.removeprefix("_cmd_")
+        for name in dir(AgentController)
+        if name.startswith("_cmd_") and name != "_cmd_help"
+    }
+    assert set(LOCAL_ONLY_COMMAND_NAMES) == handlers
+
+
 def test_goal_requires_acceptance_and_reference(tmp_path):
     root, settings = _repository(tmp_path)
     controller = AgentController(root, settings_path=settings)
     result = controller.handle("/goal Change the parser")
     assert not result.ok
     assert "acceptance criterion" in result.message
-    assert controller.handle("/help").ok
+    help_result = controller.handle("/help")
+    assert help_result.ok
+    assert "/start <task-id>   (creates an isolated worktree; launches no provider)" in help_result.message
+    assert "GitHub `/help` lists the local commands with an explicit unavailable status" in help_result.message
 
 
 def test_vibeci_prefix_is_case_insensitive_and_never_evaluates_shell_text(tmp_path):
