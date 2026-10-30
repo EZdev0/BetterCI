@@ -90,43 +90,28 @@ def test_comment_workflow_is_read_only_and_default_branch_only():
     assert triggers == {"issue_comment": {"types": ["created"]}}
     assert workflow["permissions"] == {}
 
-    job = workflow["jobs"]["diagnostics"]
-    condition = job["if"]
-    for required in (
-        "github.run_attempt == 1",
-        "github.event.comment.author_association",
-        "OWNER",
-        "MEMBER",
-        "COLLABORATOR",
-    ):
-        assert required in condition
-    assert "github.event.issue.pull_request" not in condition
-    assert job["permissions"] == {
-        "actions": "read",
-        "contents": "read",
-        "issues": "write",
-        "pull-requests": "read",
+    jobs = workflow["jobs"]
+    assert set(jobs) == {"issue_diagnostics", "pull_request_diagnostics"}
+    expected = {
+        "issue_diagnostics": {
+            "context": "github.event.issue.pull_request == null",
+            "permissions": {
+                "actions": "read",
+                "contents": "read",
+                "issues": "write",
+                "pull-requests": "read",
+            },
+        },
+        "pull_request_diagnostics": {
+            "context": "github.event.issue.pull_request != null",
+            "permissions": {
+                "actions": "read",
+                "contents": "read",
+                "pull-requests": "write",
+            },
+        },
     }
-    assert job["runs-on"] == "ubuntu-24.04"
-    assert job["timeout-minutes"] <= 5
-
-    text = path.read_text(encoding="utf-8")
-    assert "pull_request_target" not in text
-    assert "workflow_run" not in text
-    assert "actions/cache" not in text
-    assert text.count("secrets.") == 1
-    assert "${{ secrets.VIBECI_COMMAND_POLICY_JSON }}" in text
-    assert "github.event.pull_request.head" not in text
-
-    checkout = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@"))
-    assert checkout["with"] == {
-        "ref": "${{ github.sha }}",
-        "fetch-depth": 1,
-        "persist-credentials": False,
-    }
-    command = job["steps"][-1]
-    assert command["run"] == "python3 -m vibeci.github_commands"
-    assert command["env"] == {
+    command_environment = {
         "GITHUB_API_URL": "https://api.github.com",
         "GITHUB_EVENT_PATH": "${{ github.event_path }}",
         "GITHUB_REPOSITORY": "${{ github.repository }}",
@@ -135,6 +120,43 @@ def test_comment_workflow_is_read_only_and_default_branch_only():
         "VIBECI_COMMAND_POLICY_JSON": "${{ secrets.VIBECI_COMMAND_POLICY_JSON }}",
         "VIBECI_DEFAULT_SHA": "${{ github.sha }}",
     }
+    for job_name, specification in expected.items():
+        job = jobs[job_name]
+        condition = job["if"]
+        for required in (
+            "github.run_attempt == 1",
+            "startsWith(github.event.comment.body, '/')",
+            "github.event.comment.author_association",
+            "OWNER",
+            "MEMBER",
+            "COLLABORATOR",
+            specification["context"],
+        ):
+            assert required in condition
+        assert job["permissions"] == specification["permissions"]
+        assert job["runs-on"] == "ubuntu-24.04"
+        assert job["timeout-minutes"] <= 5
+
+        checkout = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@"))
+        assert checkout["with"] == {
+            "ref": "${{ github.sha }}",
+            "fetch-depth": 1,
+            "persist-credentials": False,
+        }
+        command = job["steps"][-1]
+        assert command["run"] == "python3 -m vibeci.github_commands"
+        assert command["env"] == command_environment
+
+    assert "issues" not in jobs["pull_request_diagnostics"]["permissions"]
+    assert jobs["issue_diagnostics"]["permissions"]["pull-requests"] == "read"
+
+    text = path.read_text(encoding="utf-8")
+    assert "pull_request_target" not in text
+    assert "workflow_run" not in text
+    assert "actions/cache" not in text
+    assert text.count("secrets.") == 2
+    assert text.count("${{ secrets.VIBECI_COMMAND_POLICY_JSON }}") == 2
+    assert "github.event.pull_request.head" not in text
 
 
 def test_action_metadata_is_complete():

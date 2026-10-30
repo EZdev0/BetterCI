@@ -35,7 +35,7 @@ _HELP = """VibeCI agent commands:
 /status
 /approve <plan-id>   (alias: /ok <plan-id>)
 /tasks
-/start <task-id>
+/start <task-id>   (creates an isolated worktree; launches no provider)
 /verify <task-id>
 /review standard|advanced
 /restore <task-id>
@@ -54,7 +54,7 @@ Planning is read-only. Writes require an approved plan and an isolated managed w
 
 Policy-authorized GitHub issue/PR comments use a separate diagnostics-only adapter after its workflow is on the default branch:
 /help | /ci | /runs | /run <run-id> | /runners | /failures
-Data commands optionally accept --target default|pr:<number>. They show target-bound Actions status, assigned runners and failing steps; they cannot execute, rerun, cancel, approve or merge."""
+Data commands optionally accept --target default|pr:<number>. They inspect target-bound Actions status, assigned runners and failing steps; they cannot start, rerun, cancel, approve or merge. GitHub `/help` lists the local commands with an explicit unavailable status, and authorized attempts to use one receive an availability response instead of execution."""
 
 
 class StateStore:

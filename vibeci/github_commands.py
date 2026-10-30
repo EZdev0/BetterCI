@@ -25,6 +25,7 @@ from .github_api import (
     GitHubAPIError,
 )
 from .github_policy import (
+    LOCAL_ONLY_COMMAND_NAMES,
     MAX_POLICY_CHARS,
     CommandEvent,
     CommandPolicy,
@@ -60,6 +61,28 @@ _PERMISSION_HELP = (
     "https://docs.github.com/en/actions/security-for-github-actions/security-guides/"
     "automatic-token-authentication#modifying-the-permissions-for-the-github_token"
 )
+_LOCAL_COMMAND_HELP = {
+    "goal": ("`/goal <objective> --accept <criterion> --ref <evidence>`", "Record an evidence-backed goal."),
+    "plan": ("`/plan`", "Ask a configured loopback planner for a validated plan."),
+    "status": ("`/status`", "Show local goal, plan, approval and task state."),
+    "approve": ("`/approve <plan-id>`", "Approve one exact local plan digest."),
+    "ok": ("`/ok <plan-id>`", "Alias for local `/approve`."),
+    "tasks": ("`/tasks`", "List local plan tasks and evidence."),
+    "start": ("`/start <task-id>`", "Create an isolated local branch/worktree; launch no provider."),
+    "verify": ("`/verify <task-id>`", "Run reviewed deterministic checks locally."),
+    "review": ("`/review standard|advanced`", "Select local review depth."),
+    "restore": ("`/restore <task-id>`", "Reset tracked files in one managed local worktree."),
+    "stop": ("`/stop <agent-id>`", "Mark a local worker/reviewer stopped."),
+    "ask": ("`/ask <team> -- <question>`", "Create a blocking local question."),
+    "answer": ("`/answer <question-id> -- <answer>`", "Record a local human answer."),
+    "teams": ("`/teams`", "Show committed expert-team contracts."),
+    "brief": ("`/brief <team> -- <request>`", "Build a bounded brief; launch no provider."),
+    "note": ("`/note <team> <kind> -- <text> --ref <evidence>`", "Append an ignored local note."),
+    "context": ("`/context`", "Show bounded local shared context."),
+    "notifications": ("`/notifications [all|open]`", "Inspect local notifications."),
+    "ack": ("`/ack <notification-id>`", "Acknowledge one local notification."),
+    "schedule": ("`/schedule <cron> -- /verify|/status`", "Record a local proposal; schedule nothing."),
+}
 
 
 def _markdown(value: Any, maximum: int = 100) -> str:
@@ -191,33 +214,71 @@ def _job_table(repository: str, run_id: int, jobs: list[dict[str, Any]]) -> list
 
 
 def _help() -> str:
-    return "\n".join(
+    lines = [
+        "## VibeCI command availability",
+        "",
+        "### Available here: GitHub-hosted read-only diagnostics",
+        "",
+        "Commands are case-insensitive and may use the `/vibeci` prefix:",
+        "",
+        "| Command | Result |",
+        "|---|---|",
+        "| `/help` | Show both command surfaces and their exact availability. |",
+        "| `/ci [--target default\\|pr:<number>]` | Inspect runs, jobs, runners and failed steps; start nothing. |",
+        "| `/runs [--target default\\|pr:<number>]` | List up to five runs for the exact target SHA. |",
+        "| `/run <id> [--target default\\|pr:<number>]` | Inspect one existing run and its jobs; rerun nothing. |",
+        "| `/runners [--target default\\|pr:<number>]` | Show runners assigned to target-bound jobs. |",
+        "| `/failures [--target default\\|pr:<number>]` | Show failed jobs and failed steps. |",
+        "",
+        "Without `--target`, a PR conversation selects that PR's current head; an allowed control issue "
+        "selects the exact default-branch event head.",
+        "Examples: `/Help`, `/vibeci ci --target default`, `/runs --target pr:5`.",
+        "",
+        "### Local controller only: unavailable in GitHub comments",
+        "",
+        "These commands require `python -m vibeci agent` on a persistent checkout. GitHub comments recognize "
+        "their names only to return an explicit availability response; they do not execute them.",
+        "",
+        "| Command | Local effect |",
+        "|---|---|",
+    ]
+    for name in LOCAL_ONLY_COMMAND_NAMES:
+        usage, effect = _LOCAL_COMMAND_HELP[name]
+        escaped_usage = usage.replace("|", "\\|")
+        lines.append(f"| {escaped_usage} | {effect} |")
+    lines.extend(
         [
-            "## VibeCI read-only CI diagnostics",
             "",
-            "Commands are case-insensitive and may use the `/vibeci` prefix:",
+            "Local `/start` requires a recorded goal, validated plan and exact human approval. It creates only "
+            "an isolated branch/worktree; it does **not** launch a model, provider or implementation worker.",
+            "A durable GitHub-hosted goal/plan/start lifecycle is a separate future stage, not a shipped feature.",
             "",
-            "| Command | Result |",
-            "|---|---|",
-            "| `/help` | Show this contract. |",
-            "| `/ci [--target default\\|pr:<number>]` | Show runs, jobs, runners and failed steps. |",
-            "| `/runs [--target default\\|pr:<number>]` | List up to five runs for the exact target SHA. |",
-            "| `/run <id> [--target default\\|pr:<number>]` | Show one target-bound run and its jobs. |",
-            "| `/runners [--target default\\|pr:<number>]` | Show runners assigned to target-bound jobs. |",
-            "| `/failures [--target default\\|pr:<number>]` | Show failed jobs and failed steps. |",
-            "",
-            "Without `--target`, a PR conversation selects that PR's current head; an allowed control issue "
-            "selects the exact default-branch event head.",
-            "Examples: `/Help`, `/vibeci ci --target default`, `/runs --target pr:5`.",
+            "### Authorization, scope and bounds",
             "",
             "Access requires both a trusted repository role and an exact login/user-ID policy match; ordinary "
             "issues must also be policy-listed control issues.",
-            "This surface is diagnostics-only: it cannot run, rerun, cancel, approve, merge, or execute PR code. "
-            "It reports runner assignments from workflow jobs, not an admin-level self-hosted-runner inventory.",
+            "This GitHub surface cannot start, rerun, cancel, approve, merge, or execute PR code. It reports "
+            "runner assignments from workflow jobs, not an admin-level self-hosted-runner inventory.",
             f"At most {MAX_CANDIDATE_RUNS} candidate runs are scanned and {MAX_RUNS} non-command runs reported.",
             f"Each run view is capped at {MAX_JOBS} latest-attempt jobs; use the linked run for a larger matrix.",
             f"Each REST response is capped at {MAX_RESPONSE_BYTES // (1024 * 1024)} MiB with a "
             f"{REQUEST_TIMEOUT_SECONDS}-second timeout.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _local_only(command_name: str) -> str:
+    usage, effect = _LOCAL_COMMAND_HELP[command_name]
+    return "\n".join(
+        [
+            "## VibeCI command is local-only",
+            "",
+            f"{usage} is recognized, but it is not available in GitHub issue or PR comments.",
+            f"Local behavior: {effect}",
+            "",
+            "No state, branch, worktree, workflow, model or provider was started.",
+            "Use `/help` to see the shipped GitHub diagnostics and the complete local-only lifecycle.",
         ]
     )
 
@@ -363,6 +424,10 @@ def render_command(api: GitHubAPI, event: CommandEvent) -> str:
     """Fetch only data needed by the selected command and render bounded Markdown."""
     if event.command.name == "help":
         body = _help()
+    elif event.command.name == "local-only":
+        if event.command.local_command not in LOCAL_ONLY_COMMAND_NAMES:
+            raise CommandUsageError("local-only command identity is invalid")
+        body = _local_only(event.command.local_command)
     elif event.command.name == "run":
         if event.command.run_id is None:
             raise CommandUsageError("usage: /run <numeric-run-id>")
@@ -404,7 +469,7 @@ def _usage_error_body(message: str, comment_id: int) -> str:
                 "",
                 safe,
                 "",
-                "Use `/help` for the case-insensitive read-only command grammar.",
+                "Use `/help` for command availability and the case-insensitive diagnostics grammar.",
                 "No workflow was rerun or cancelled, and no PR code was executed.",
             ]
         ),
@@ -470,7 +535,7 @@ def run(
     if command is None:
         return 0
     try:
-        if command.command.name != "help":
+        if command.command.name not in {"help", "local-only"}:
             command = resolve_target(command, api)
         response = render_command(api, command)
     except CommandUsageError as exc:

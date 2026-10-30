@@ -96,7 +96,7 @@ The committed `.agents/bigbrain/` map has one manager per expert team. Mutable n
 
 Scope settings hide configured directories/extensions (including `.eng`) from planner context and reject managed changes to ignored/denied paths. `allowed_path_globs`, `denied_path_globs`, protected paths, verification argv lists, team limits and notification limits are reviewed in `.agents/settings.yml`.
 
-`/approve` never means merge. `/schedule` records only a validated `/verify` or `/status` proposal; it never silently creates workflow YAML. Standard PR findings remain visible through annotations, reviews, summaries and JSON artifacts. Stateful comment execution remains deliberately unshipped until durable state, stronger authorization, low-trust cache handling and ephemeral-runner recovery are solved; see `FUTURE.md`.
+`/approve` never means merge. `/schedule` records only a validated `/verify` or `/status` proposal; it never silently creates workflow YAML. Standard PR findings remain visible through annotations, reviews, summaries and JSON artifacts. Local `/start <task-id>` only creates an isolated branch/worktree after goal, plan and approval; it does not launch a model, provider or coding worker. Stateful comment execution remains deliberately unshipped until durable state, stronger authorization, low-trust cache handling and ephemeral-runner recovery are solved; see `FUTURE.md`.
 
 ### GitHub issue and PR comment diagnostics
 
@@ -104,14 +104,16 @@ The repository ships a separate **read-only** command surface for policy-authori
 
 | Command | Result |
 |---|---|
-| `/help` or `/vibeci help` | Command list, authorization, limits and scope. `/Help` and other casing work too. |
-| `/ci [--target default\|pr:<number>]` | Target-bound workflow/job status, assigned runner metadata and failed steps. |
+| `/help` or `/vibeci help` | Both command surfaces, exact availability, authorization, limits and scope. `/Help` and other casing work too. |
+| `/ci [--target default\|pr:<number>]` | Inspect target-bound workflow/job status, assigned runner metadata and failed steps; it does not start CI. |
 | `/runs [--target default\|pr:<number>]` | Up to five recent non-command runs for the exact target SHA. |
-| `/run <run-id> [--target default\|pr:<number>]` | Detailed jobs for one run, rejected if its SHA does not match the exact target. |
+| `/run <run-id> [--target default\|pr:<number>]` | Inspect detailed jobs for one existing run, rejected if its SHA does not match the exact target; it does not run or rerun anything. |
 | `/runners [--target default\|pr:<number>]` | Runners assigned to target-bound jobs; no admin-only runner inventory. |
 | `/failures [--target default\|pr:<number>]` | Failed, cancelled or timed-out jobs and failed step names with GitHub links. |
 
 Automatic targeting uses the current PR head in a PR conversation and the event's exact default-branch SHA in a policy-listed control issue. A trusted actor may select `--target default` or a same-repository PR such as `--target pr:5`; arbitrary refs, branches and comment-supplied SHAs are rejected. The command workflow itself is excluded from run listings so repeated comments cannot immediately displace real CI evidence.
+
+The GitHub help response separately lists the local-only lifecycle commands: `/goal`, `/plan`, `/status`, `/approve`/`/ok`, `/tasks`, `/start`, `/verify`, `/review`, `/restore`, `/stop`, `/ask`, `/answer`, `/teams`, `/brief`, `/note`, `/context`, `/notifications`/`/ack`, and `/schedule`. They require a persistent local checkout and are **not** executed by GitHub comments. A policy-authorized comment using one of those known names receives an explicit bounded availability response instead of being silently ignored; unrelated bot commands remain untouched. GitHub-hosted goal/plan/start execution is the next separately reviewed stage, not a capability claim in this release.
 
 A repository administrator must create the Actions secret `VIBECI_COMMAND_POLICY_JSON`. It is strict JSON with exactly `version`, `trusted_actors` and `control_issues`; each actor needs both the GitHub login and immutable numeric user ID. The policy approved for this repository is:
 
@@ -121,7 +123,7 @@ A repository administrator must create the Actions secret `VIBECI_COMMAND_POLICY
 
 Authorization fails closed unless the repository matches, the event role is `OWNER`, `MEMBER` or `COLLABORATOR`, the event login and user ID exactly match the secret policy, and a normal issue is listed as a control issue. Missing, malformed, duplicate or oversized policy data fails the Action without printing the secret; unauthorized comments receive no bot response. Because Actions secrets cannot be evaluated directly in a job-level `if`, the public role check happens before runner allocation and the exact secret-backed identity check happens in default-branch Python before any metadata read.
 
-Responses scan at most 50 candidate runs, report at most five non-command runs, inspect at most 50 latest-attempt jobs per run, cap each REST response at 2 MiB with a 20-second timeout, and use a 24,000-character comment budget. The adapter checks out the event's exact default-branch SHA, never checks out or runs contributor code, never reads job logs, installs no dependencies, uses no cache, blocks rerun attempts, and cannot start/cancel CI. Its token remains limited to `actions: read`, `contents: read`, `pull-requests: read`, and `issues: write`. Only the Python command step receives the bounded policy secret; comment text and policy fields are parsed as data and never become shell input or checkout refs.
+Responses scan at most 50 candidate runs, report at most five non-command runs, inspect at most 50 latest-attempt jobs per run, cap each REST response at 2 MiB with a 20-second timeout, and use a 24,000-character comment budget. The adapter checks out the event's exact default-branch SHA, never checks out or runs contributor code, never reads job logs, installs no dependencies, uses no cache, blocks rerun attempts, and cannot start/cancel CI. Mutually exclusive jobs keep response writes resource-specific: normal Issues receive `issues: write` plus `pull-requests: read` for safe target selection; PR conversations receive `pull-requests: write` and no Issues scope. Both jobs otherwise have only `actions: read` and `contents: read`. Only the Python command step receives the bounded policy secret; comment text and policy fields are parsed as data and never become shell input or checkout refs.
 
 ### Optional tokenless web research
 

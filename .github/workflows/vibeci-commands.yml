@@ -5,7 +5,8 @@ on:
     types: [created]
 
 # The command adapter can read CI metadata and post one policy-authorized
-# issue/PR response. It cannot rerun, cancel, approve, merge, or write code.
+# response. Mutually exclusive jobs keep Issue and PR write scopes separate.
+# Neither job can rerun, cancel, approve, merge, or write repository contents.
 permissions: {}
 
 concurrency:
@@ -13,10 +14,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  diagnostics:
-    name: read-only issue/PR CI diagnostics
+  issue_diagnostics:
+    name: read-only Issue CI diagnostics
     if: >-
       github.run_attempt == 1 &&
+      github.event.issue.pull_request == null &&
       startsWith(github.event.comment.body, '/') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-24.04
@@ -37,7 +39,41 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Read CI metadata and post bounded diagnostics
+      - name: Read CI metadata and post bounded Issue diagnostics
+        env:
+          GITHUB_API_URL: https://api.github.com
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+          VIBECI_ACTOR: ${{ github.actor }}
+          VIBECI_COMMAND_POLICY_JSON: ${{ secrets.VIBECI_COMMAND_POLICY_JSON }}
+          VIBECI_DEFAULT_SHA: ${{ github.sha }}
+        run: python3 -m vibeci.github_commands
+
+  pull_request_diagnostics:
+    name: read-only PR CI diagnostics
+    if: >-
+      github.run_attempt == 1 &&
+      github.event.issue.pull_request != null &&
+      startsWith(github.event.comment.body, '/') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    steps:
+      # A PR conversation still executes only the exact trusted default-branch
+      # event SHA. The selected PR head is metadata and is never checked out.
+      - name: Checkout reviewed default-branch command code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Read CI metadata and post bounded PR diagnostics
         env:
           GITHUB_API_URL: https://api.github.com
           GITHUB_EVENT_PATH: ${{ github.event_path }}

@@ -14,8 +14,33 @@ MAX_POLICY_CHARS = 8_192
 MAX_POLICY_ACTORS = 50
 MAX_CONTROL_ISSUES = 50
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
-_COMMAND_NAMES = frozenset({"help", "ci", "runs", "run", "runners", "failures"})
-_BARE_COMMANDS = frozenset(f"/{name}" for name in _COMMAND_NAMES)
+_DIAGNOSTIC_COMMAND_NAMES = frozenset({"help", "ci", "runs", "run", "runners", "failures"})
+LOCAL_ONLY_COMMAND_NAMES = (
+    "goal",
+    "plan",
+    "status",
+    "approve",
+    "ok",
+    "tasks",
+    "start",
+    "verify",
+    "review",
+    "restore",
+    "stop",
+    "ask",
+    "answer",
+    "teams",
+    "brief",
+    "note",
+    "context",
+    "notifications",
+    "ack",
+    "schedule",
+)
+_LOCAL_ONLY_COMMAND_NAMES = frozenset(LOCAL_ONLY_COMMAND_NAMES)
+_BARE_COMMANDS = frozenset(
+    f"/{name}" for name in _DIAGNOSTIC_COMMAND_NAMES | _LOCAL_ONLY_COMMAND_NAMES
+)
 _HEAD_SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
 _LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 
@@ -40,6 +65,7 @@ class ParsedCommand:
     run_id: int | None = None
     target: str = "auto"
     target_pull_request: int | None = None
+    local_command: str | None = None
 
 
 @dataclass(frozen=True)
@@ -193,7 +219,9 @@ def parse_comment(body: str) -> ParsedCommand | None:
     if normalized is None:
         return None
     name, arguments, prefixed = normalized
-    if not name.isascii() or name not in _COMMAND_NAMES:
+    if name in _LOCAL_ONLY_COMMAND_NAMES:
+        return ParsedCommand("local-only", local_command=name)
+    if not name.isascii() or name not in _DIAGNOSTIC_COMMAND_NAMES:
         if prefixed:
             raise CommandUsageError(f"unknown read-only command: {name}")
         return None

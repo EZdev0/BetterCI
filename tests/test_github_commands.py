@@ -22,6 +22,7 @@ from vibeci.github_commands import (
     parse_policy,
     run,
 )
+from vibeci.github_policy import LOCAL_ONLY_COMMAND_NAMES
 
 HEAD_SHA = "a" * 40
 OTHER_SHA = "b" * 40
@@ -193,6 +194,21 @@ def test_comment_parser_is_case_insensitive(text, name, run_id, target, target_p
     assert parsed.target_pull_request == target_pull_request
 
 
+def test_comment_parser_recognizes_local_only_commands_without_parsing_arguments():
+    for name in LOCAL_ONLY_COMMAND_NAMES:
+        parsed = parse_comment(f"/{name} untrusted arguments are not executed")
+        assert parsed is not None
+        assert parsed.name == "local-only"
+        assert parsed.local_command == name
+        assert parsed.run_id is None
+        assert parsed.target == "auto"
+
+    prefixed = parse_comment("/vibeci start task-1")
+    assert prefixed is not None
+    assert prefixed.name == "local-only"
+    assert prefixed.local_command == "start"
+
+
 def test_comment_parser_ignores_unrelated_commands_and_rejects_ambiguous_input():
     assert parse_comment("ordinary conversation") is None
     assert parse_comment("/dependabot rebase") is None
@@ -241,7 +257,7 @@ def test_malformed_selected_command_gets_a_bounded_usage_response():
     assert "least-privilege token settings" not in body
 
 
-def test_comment_help_is_case_insensitive():
+def test_comment_help_distinguishes_diagnostics_from_local_control():
     api = FakeAPI()
 
     result = _execute(_event("/Help"), api)
@@ -250,12 +266,39 @@ def test_comment_help_is_case_insensitive():
     assert api.calls == [("post", 17)]
     assert len(api.posted) == 1
     body = api.posted[0][1]
-    assert "VibeCI read-only CI diagnostics" in body
+    assert "VibeCI command availability" in body
+    assert "Available here: GitHub-hosted read-only diagnostics" in body
     assert "/runners" in body and "/failures" in body
     assert "--target default" in body and "pr:<number>" in body
+    assert "Inspect one existing run" in body and "rerun nothing" in body
+    assert "Local controller only: unavailable in GitHub comments" in body
+    for name in LOCAL_ONLY_COMMAND_NAMES:
+        assert f"/{name}" in body
+    assert "creates only an isolated branch/worktree" in body
+    assert "does **not** launch a model, provider or implementation worker" in body
     assert "exact login/user-ID policy match" in body
     assert "2 MiB" in body and "20-second timeout" in body
-    assert "cannot run, rerun, cancel, approve, merge" in body
+    assert "cannot start, rerun, cancel, approve, merge" in body
+
+
+def test_known_local_commands_get_actionable_github_response():
+    for name in LOCAL_ONLY_COMMAND_NAMES:
+        api = FakeAPI()
+        result = _execute(_event(f"/{name} @everyone https://attacker.invalid"), api)
+
+        assert result == 0
+        assert api.calls == [("post", 17)]
+        body = api.posted[0][1]
+        assert "VibeCI command is local-only" in body
+        assert f"`/{name}" in body
+        assert "not available in GitHub issue or PR comments" in body
+        assert "No state, branch, worktree, workflow, model or provider was started" in body
+        assert "@everyone" not in body
+        assert "attacker.invalid" not in body
+
+    unrelated_api = FakeAPI()
+    assert _execute(_event("/dependabot rebase"), unrelated_api) == 0
+    assert unrelated_api.calls == [] and unrelated_api.posted == []
 
 
 def test_control_issue_help_and_ci_use_the_exact_default_branch_event_head():
