@@ -252,9 +252,40 @@ def test_malformed_selected_command_gets_a_bounded_usage_response():
     assert result == 2
     assert api.calls == [("post", 17)]
     body = api.posted[0][1]
+    assert body.startswith(f"<!-- vibeci-read-only-ci-diagnostics -->\n@{ACTOR_LOGIN} ")
     assert "diagnostic command rejected" in body
     assert "usage: /run &lt;numeric-run-id&gt;" in body
     assert "least-privilege token settings" not in body
+
+
+def test_response_mentions_only_the_verified_command_actor():
+    api = FakeAPI()
+
+    assert _execute(_event("/help"), api) == 0
+
+    body = api.posted[0][1]
+    assert body.startswith(f"<!-- vibeci-read-only-ci-diagnostics -->\n@{ACTOR_LOGIN} ")
+    assert "VibeCI command availability" in body
+
+    injection_api = FakeAPI()
+    assert _execute(_event("/vibeci @everyone"), injection_api) == 2
+    injection = injection_api.posted[0][1]
+    assert injection.startswith(f"<!-- vibeci-read-only-ci-diagnostics -->\n@{ACTOR_LOGIN} ")
+    assert "@everyone" not in injection
+
+
+def test_api_failure_response_mentions_the_verified_command_actor():
+    class FailingAPI(FakeAPI):
+        def workflow_runs(self, head_sha: str) -> list[dict[str, Any]]:
+            raise github_api.GitHubAPIError("list workflow runs", 500)
+
+    api = FailingAPI()
+
+    assert _execute(_event("/ci"), api) == 2
+
+    body = api.posted[0][1]
+    assert body.startswith(f"<!-- vibeci-read-only-ci-diagnostics -->\n@{ACTOR_LOGIN} ")
+    assert "diagnostic command failed" in body
 
 
 def test_comment_help_distinguishes_diagnostics_from_local_control():

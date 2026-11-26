@@ -82,6 +82,9 @@ class CommandEvent:
     head_sha: str
     target_label: str
     command: ParsedCommand
+    # Exact, already-authorized GitHub login of the comment author. Only this
+    # value may be turned into an @mention in a response.
+    actor: str
 
 
 def _positive_int(value: Any) -> bool:
@@ -313,6 +316,7 @@ def command_event(
         head_sha="",
         target_label="",
         command=command,
+        actor=actor,
     )
 
 

@@ -35,6 +35,7 @@ from .github_policy import (
     parse_comment,
     parse_policy,
     resolve_target,
+    valid_login,
     validate_runtime_context,
 )
 
@@ -96,6 +97,11 @@ def _markdown(value: Any, maximum: int = 100) -> str:
     for character in "|*[]()_#!~":
         text = text.replace(character, "\\" + character)
     return text or "—"
+
+
+def _mention(actor: str) -> str:
+    """Build one @mention from the verified event actor, never from comment text."""
+    return f"@{actor}" if valid_login(actor) else ""
 
 
 def _state(value: Any) -> str:
@@ -448,23 +454,25 @@ def render_command(api: GitHubAPI, event: CommandEvent) -> str:
             body = _render_failures(api, event, runs, candidate_limit_reached)
         else:  # Defensive: parser and dispatch must evolve together.
             raise CommandUsageError(f"unsupported command: {event.command.name}")
-    return _bounded_response(body, event.comment_id)
+    return _bounded_response(body, event.comment_id, event.actor)
 
 
-def _bounded_response(body: str, comment_id: int) -> str:
+def _bounded_response(body: str, comment_id: int, actor: str = "") -> str:
+    mention = _mention(actor)
+    prefix = f"{mention} " if mention else ""
     footer = f"\n\n_Requested by comment `{comment_id}`._"
-    complete = f"{_RESPONSE_MARKER}\n{body}{footer}"
+    complete = f"{_RESPONSE_MARKER}\n{prefix}{body}{footer}"
     if len(complete) <= MAX_COMMENT_CHARS:
         return complete
     notice = "\n\n> Output truncated by BetterCI's comment budget. Use `/run <id>` for one bounded run."
-    available = MAX_COMMENT_CHARS - len(_RESPONSE_MARKER) - len(notice) - len(footer) - 2
+    available = MAX_COMMENT_CHARS - len(_RESPONSE_MARKER) - len(prefix) - len(notice) - len(footer) - 2
     clipped = body[:available]
     if "\n" in clipped:
         clipped = clipped.rsplit("\n", 1)[0]
-    return f"{_RESPONSE_MARKER}\n{clipped}{notice}{footer}"
+    return f"{_RESPONSE_MARKER}\n{prefix}{clipped}{notice}{footer}"
 
 
-def _usage_error_body(message: str, comment_id: int) -> str:
+def _usage_error_body(message: str, comment_id: int, actor: str = "") -> str:
     safe = _markdown(message, 500)
     return _bounded_response(
         "\n".join(
@@ -478,15 +486,18 @@ def _usage_error_body(message: str, comment_id: int) -> str:
             ]
         ),
         comment_id,
+        actor,
     )
 
 
-def _error_body(message: str, comment_id: int) -> str:
+def _error_body(message: str, comment_id: int, actor: str = "") -> str:
     safe = _markdown(message, 500)
+    mention = _mention(actor)
+    prefix = f"{mention} " if mention else ""
     return "\n".join(
         [
             _RESPONSE_MARKER,
-            "## VibeCI diagnostic command failed",
+            f"{prefix}## VibeCI diagnostic command failed",
             "",
             safe,
             "",
@@ -531,7 +542,7 @@ def run(
         coordinates = _event_comment_ids(event)
         if coordinates is not None:
             try:
-                api.post_comment(coordinates[0], _usage_error_body(str(exc), coordinates[1]))
+                api.post_comment(coordinates[0], _usage_error_body(str(exc), coordinates[1], actor))
             except GitHubAPIError as post_exc:
                 _annotation(str(post_exc))
         _annotation(str(exc))
@@ -544,14 +555,14 @@ def run(
         response = render_command(api, command)
     except CommandUsageError as exc:
         try:
-            api.post_comment(command.issue_number, _usage_error_body(str(exc), command.comment_id))
+            api.post_comment(command.issue_number, _usage_error_body(str(exc), command.comment_id, command.actor))
         except GitHubAPIError as post_exc:
             _annotation(str(post_exc))
         _annotation(str(exc))
         return 2
     except GitHubAPIError as exc:
         try:
-            api.post_comment(command.issue_number, _error_body(str(exc), command.comment_id))
+            api.post_comment(command.issue_number, _error_body(str(exc), command.comment_id, command.actor))
         except GitHubAPIError as post_exc:
             _annotation(str(post_exc))
         _annotation(str(exc))

@@ -6,6 +6,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Added
 
+- GitHub comment diagnostics now ping the verified command executor with one `@login` mention in every successful, rejected and failed response; mentions from comment text remain escaped.
 - `vibeci.graph`: deterministic lifecycle and task DAGs with actor-declared nodes, validated event edges, cycle detection, Mermaid rendering and dependency-ready scheduling; new `/graph` command.
 - `vibeci.bot`: rule-based event routing with an allowlist, open-question priority and non-executing decisions; new `/next` and `/bot` commands.
 - `vibeci.grounding`: evidence-ledger verification for published review statements, SHA-256 provenance digests and a guarantee that model-authored prose is never published as fact.
