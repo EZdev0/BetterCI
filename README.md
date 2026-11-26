@@ -23,6 +23,8 @@ AI reviewers fail in CI for three reasons: they spam, they hallucinate broken pa
 3. **Nothing is posted unverified.** The patched file must parse, must not add a *new* linter/compiler/ShellCheck rule (compared per rule code, not by total count), must avoid suspicious added code/excessive deletion and must touch only lines visible in the PR diff.
 4. **Advanced work starts from evidence.** A goal needs measurable acceptance criteria and path/rule/issue/URL references. A read-only plan gets an immutable digest; writes need `/approve <plan-id>` and a clean baseline.
 5. **Workers are recoverable.** Every task attempt gets a dedicated branch/worktree. `/verify` runs deny-first change policy plus reviewed argv checks; `/restore` is restricted to marked worker worktrees and preserves untracked files.
+6. **Control is a graph, not a guess.** `/graph` renders the lifecycle and the plan DAG; `/next` and `/bot` use an explicit rule table. No model selects an edge, and the default bot never calls a model.
+7. **Published statements are evidence or they are absent.** Model-authored prose is not copied into review comments. Published details are exact scanner messages, source lines, gate results and a SHA-256 provenance digest, re-checked against an evidence ledger.
 
 ## Install (one workflow file)
 ```yaml
@@ -90,6 +92,13 @@ python -m vibeci agent --text "/brief security -- 'Review the approved diff'"
 # Append a timestamped, evidence-linked local note and inspect bounded shared context:
 python -m vibeci agent --text "/note research evidence -- 'JSON output requires instance configuration' --ref RESEARCH.md"
 python -m vibeci agent --text "/context"
+
+# Render the lifecycle/plan graphs and ask the rule-based bot for safe next commands:
+python -m vibeci agent --text "/graph"
+python -m vibeci agent --text "/next"
+python -m vibeci agent --text "/bot status_requested"   # blocked events return exit code 2
+# After /stop <agent-id>, only a human can re-enable that ID:
+python -m vibeci agent --text "/resume <agent-id>"
 ```
 
 The committed `.agents/bigbrain/` map has one manager per expert team. Mutable notes are immutable per-record files under ignored `.vibeci/bigbrain/`, so teams do not overwrite a shared document. Context is bounded by character/entry budgets; omitted records remain on disk and are represented by a count and SHA-256 digest. Request triage pauses instruction overrides, destructive operations, credential exposure, malware construction and security-bypass requests. A human `/answer` does not bypass policy or approve work.
@@ -97,6 +106,16 @@ The committed `.agents/bigbrain/` map has one manager per expert team. Mutable n
 Scope settings hide configured directories/extensions (including `.eng`) from planner context and reject managed changes to ignored/denied paths. `allowed_path_globs`, `denied_path_globs`, protected paths, verification argv lists, team limits and notification limits are reviewed in `.agents/settings.yml`.
 
 `/approve` never means merge. `/schedule` records only a validated `/verify` or `/status` proposal; it never silently creates workflow YAML. Standard PR findings remain visible through annotations, reviews, summaries and JSON artifacts. Local `/start <task-id>` only creates an isolated branch/worktree after goal, plan and approval; it does not launch a model, provider or coding worker. Stateful comment execution remains deliberately unshipped until durable state, stronger authorization, low-trust cache handling and ephemeral-runner recovery are solved; see `FUTURE.md`.
+
+### Deterministic graphs, rule-based bot and grounded output
+
+`vibeci.graph` describes the lifecycle as nodes with declared actors (human, deterministic code, bounded model role) and event edges. Retry edges are explicit and bounded by the attempt limit elsewhere; the plan DAG must be acyclic and is validated before approval. `/graph` emits Mermaid from validated state and `/next` reports which tasks have verified dependencies. Nothing in these paths uses a model.
+
+`vibeci.bot` is a rule table, not an LLM router. `/bot <event>` maps a known event to one allowlisted command and returns `blocked` for anything unknown, ambiguous or blocked by an open human question. The bot never executes the command, never approves a plan and never merges. Only `/plan` and the optional verifier roles use a model, and each is separately disclosed.
+
+`vibeci.grounding` addresses the "no hallucinations" requirement honestly: **no system can promise that a generative model never produces a wrong internal thought**. BetterCI can and does promise that a model's free-form `bug` and `edge_case.scenario` text never reaches a published review. Published detail lines are copied from the finding message, the exact source lines, the deterministic gate reason and a SHA-256 digest; every statement is resolved against an evidence ledger before publication, and one unresolved statement drops the whole suggestion. Model self-confidence is replaced by a deterministic `medium` label for gated local patches. The same rule applies to verifier summaries: only allowlisted evidence references and bounded counts are shown, never narrative confidence. This is an output guarantee, not a claim about model cognition.
+
+A stopped agent ID can no longer be started, verified or restored by a later call. `/resume <agent-id>` is the explicit human-only reversal; for tasks it marks the attempt `failed`, which still requires `/restore` before a retry.
 
 ### GitHub issue and PR comment diagnostics
 
@@ -113,7 +132,7 @@ The repository ships a separate **read-only** command surface for policy-authori
 
 Automatic targeting uses the current PR head in a PR conversation and the event's exact default-branch SHA in a policy-listed control issue. A trusted actor may select `--target default` or a same-repository PR such as `--target pr:5`; arbitrary refs, branches and comment-supplied SHAs are rejected. The command workflow itself is excluded from run listings so repeated comments cannot immediately displace real CI evidence.
 
-The GitHub help response separately lists the local-only lifecycle commands: `/goal`, `/plan`, `/status`, `/approve`/`/ok`, `/tasks`, `/start`, `/verify`, `/review`, `/restore`, `/stop`, `/ask`, `/answer`, `/teams`, `/brief`, `/note`, `/context`, `/notifications`/`/ack`, and `/schedule`. They require a persistent local checkout and are **not** executed by GitHub comments. A policy-authorized comment using one of those known names receives an explicit bounded availability response instead of being silently ignored; unrelated bot commands remain untouched. GitHub-hosted goal/plan/start execution is the next separately reviewed stage, not a capability claim in this release.
+The GitHub help response separately lists the local-only lifecycle commands: `/goal`, `/plan`, `/status`, `/approve`/`/ok`, `/tasks`, `/start`, `/verify`, `/review`, `/restore`, `/stop`, `/resume`, `/ask`, `/answer`, `/teams`, `/brief`, `/note`, `/context`, `/notifications`/`/ack`, `/schedule`, `/next`, `/graph`, and `/bot`. They require a persistent local checkout and are **not** executed by GitHub comments. A policy-authorized comment using one of those known names receives an explicit bounded availability response instead of being silently ignored; unrelated bot commands remain untouched. GitHub-hosted goal/plan/start execution is the next separately reviewed stage, not a capability claim in this release.
 
 A repository administrator must create the Actions secret `VIBECI_COMMAND_POLICY_JSON`. It is strict JSON with exactly `version`, `trusted_actors` and `control_issues`; each actor needs both the GitHub login and immutable numeric user ID. The policy approved for this repository is:
 

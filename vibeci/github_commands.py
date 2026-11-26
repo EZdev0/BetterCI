@@ -82,6 +82,10 @@ _LOCAL_COMMAND_HELP = {
     "notifications": ("`/notifications [all|open]`", "Inspect local notifications."),
     "ack": ("`/ack <notification-id>`", "Acknowledge one local notification."),
     "schedule": ("`/schedule <cron> -- /verify|/status`", "Record a local proposal; schedule nothing."),
+    "next": ("`/next`", "Show deterministic next commands; the bot does not route by model."),
+    "graph": ("`/graph`", "Render lifecycle and task graphs from validated local state."),
+    "bot": ("`/bot <event>`", "Resolve one event to an allowlisted command; never execute it."),
+    "resume": ("`/resume <agent-id>`", "Human-only reversal of a stopped agent; no automatic retry."),
 }
 
 

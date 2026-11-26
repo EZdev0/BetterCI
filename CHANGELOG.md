@@ -2,15 +2,19 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
-## [Unreleased] — 2026-10-26
+## [Unreleased] — 2026-11-26
 
 ### Added
 
+- `vibeci.graph`: deterministic lifecycle and task DAGs with actor-declared nodes, validated event edges, cycle detection, Mermaid rendering and dependency-ready scheduling; new `/graph` command.
+- `vibeci.bot`: rule-based event routing with an allowlist, open-question priority and non-executing decisions; new `/next` and `/bot` commands.
+- `vibeci.grounding`: evidence-ledger verification for published review statements, SHA-256 provenance digests and a guarantee that model-authored prose is never published as fact.
+- `/resume <agent-id>` as the explicit human-only reversal of `/stop`.
 - `.github/workflows/ci.yml`: a real CI pipeline with a Python 3.11/3.12/3.13 test matrix and a lint job (Ruff, `bash -n` + ShellCheck, zizmor, actionlint). SHA-pinned actions, least-privilege permissions, timeouts, concurrency and a deterministic self-scan of the action.
 - `.github/dependabot.yml` for weekly action-pin updates with a 7-day cooldown.
 - `requirements-dev.in` / `requirements-dev.lock`: hash-locked pytest dependencies.
 - `pyproject.toml` with an explicit Ruff rule set, so lint results do not depend on Ruff's changing defaults.
-- Regression, repository-integrity, agent/parser/worktree, Big Brain/context/research, advanced-review and GitHub comment-diagnostic coverage (98 tests total).
+- Regression, repository-integrity, agent/parser/worktree, Big Brain/context/research, advanced-review, graph/bot/grounding and GitHub comment-diagnostic coverage (104 passing tests, 2 skipped at this update).
 - `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md` and `.gitignore`.
 - English-only documentation; `docs/RESEARCH.md` translated from German.
 - Error tracking in Linear (team `PRO`, project "BetterCI (VibeCI) - CI Hardening & Error Tracking"), mirrored in `docs/ERRORS.md`. Every error records how it happened, its root cause, the solution path and the regression test.
@@ -44,6 +48,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - Trusted commands in normal GitHub issues always produced a skipped job because both the workflow and Python handler required a pull-request marker. Policy-listed control issues now use the exact default-branch event SHA, while safe `default`/same-repository-PR target selection and command-workflow filtering preserve bounded, relevant CI results.
 - Authorized diagnostic responses in PR conversations failed with HTTP 403 because the shared command job had `issues: write` but only `pull-requests: read`. Issue and PR events now select mutually exclusive jobs with their matching write scope.
 - Known local-only commands such as `/start` were silently ignored in GitHub comments and `/help` did not enumerate the full command inventory or explain runtime availability. Help now distinguishes inspection commands from the local lifecycle, and authorized local-only command attempts receive a bounded actionable response.
+- A stopped task ID could still be restored and restarted by a later command. `/stop` now blocks start, verify and restore; `/resume` requires an explicit human decision and still leaves the attempt `failed`.
+- LLM-authored `bug` and `edge_case.scenario` text and self-reported confidence were copied into published GitHub suggestions. Published details now consist only of evidence-ledger-resolved statements and a provenance digest; gated local patches get a deterministic `medium` label.
 
 ### Changed
 

@@ -9,7 +9,8 @@ import urllib.error
 import urllib.request
 
 from .diffmap import contiguous
-from .gate import apply_replacement, check_patched
+from .gate import GateResult, apply_replacement, check_patched
+from .grounding import build_grounding, render_grounding
 from .llm import LLMClient
 from .models import Finding, PatchReview, Severity, Suggestion
 from .tools import _read, log
@@ -23,15 +24,17 @@ def _overlaps(a: Suggestion, b: Suggestion) -> bool:
     return a.path == b.path and not (a.end_line < b.start_line or b.end_line < a.start_line)
 
 
-def _validated(path: str, source: str, start: int, end: int, rep: str, visible: set[int]) -> str | None:
+def _validated(
+    path: str, source: str, start: int, end: int, rep: str, visible: set[int]
+) -> tuple[str | None, GateResult | None]:
     if not contiguous(visible, start, end):
-        return "lines not in diff"
+        return "lines not in diff", None
     try:
         patched = apply_replacement(source, start, end, rep)
     except ValueError as exc:
-        return str(exc)
+        return str(exc), None
     res = check_patched(path, source, patched)
-    return None if res.ok else res.reason
+    return (None, res) if res.ok else (res.reason, res)
 
 
 def aggregate_patch_reviews(
@@ -70,7 +73,7 @@ def build_suggestions(
         src = _read(f.path)
         if f.tool_fix is None or src is None:
             continue
-        why = _validated(f.path, src, f.line, f.end_line, f.tool_fix, visible)
+        why, _gate = _validated(f.path, src, f.line, f.end_line, f.tool_fix, visible)
         if why:
             log(f"drop tool fix {f.tool}/{f.rule} {f.path}:{f.line}: {why}")
             continue
@@ -108,10 +111,19 @@ def build_suggestions(
             if not got or got[0].verdict != "fix":
                 continue
             prop = got[0]
-            why = _validated(f.path, src, prop.start_line, prop.end_line, prop.replacement or "", visible)
-            if why:
-                log(f"drop llm fix {f.rule} {f.path}:{prop.start_line}: {why}")
+            why, gate_result = _validated(
+                f.path, src, prop.start_line, prop.end_line, prop.replacement or "", visible
+            )
+            if why or gate_result is None:
+                log(f"drop llm fix {f.rule} {f.path}:{prop.start_line}: {why or 'no gate result'}")
                 continue
+            grounding = build_grounding(
+                f, src, list(range(prop.start_line, prop.end_line + 1)), gate_result.reason
+            )
+            if not grounding.ok:
+                log(f"drop llm fix {f.rule} {f.path}:{prop.start_line}: unverifiable evidence")
+                continue
+            detail, evidence_refs, grounding_digest = render_grounding(grounding)
             reviewer_summary = None
             if review_mode == "advanced":
                 reviews = [client.verify_patch(f, src, prop, deadline) for _ in range(2)]
@@ -119,9 +131,9 @@ def build_suggestions(
                 if not approved:
                     log(f"drop llm fix {f.rule} {f.path}:{prop.start_line}: {reviewer_summary}")
                     continue
-            detail = prop.bug
-            if prop.edge_case:
-                detail += f"\n\n**What-if ({prop.edge_case.kind}):** {prop.edge_case.scenario}"
+            # The model's free-form `bug` and `edge_case.scenario` are deliberately
+            # not published: only the evidence-checked statements above leave this
+            # process. The structured verdict still has to pass the gate above.
             s = Suggestion(
                 path=f.path,
                 start_line=prop.start_line,
@@ -131,9 +143,17 @@ def build_suggestions(
                 detail=detail,
                 source="llm",
                 rule=f.rule,
-                confidence=prop.confidence,
-                evidence=[f"{f.tool}/{f.rule}", f"{f.path}:{prop.start_line}-{prop.end_line}"],
+                # Do not publish the model's self-reported confidence: it is an
+                # unverified claim. A gated local proposal is always "medium";
+                # tool fixes remain "high" because a reviewed scanner produced them.
+                confidence="medium",
+                evidence=list(dict.fromkeys([
+                    f"{f.tool}/{f.rule}",
+                    f"{f.path}:{prop.start_line}-{prop.end_line}",
+                    *evidence_refs,
+                ]))[:8],
                 reviewer_summary=reviewer_summary,
+                grounding_sha256=grounding_digest,
             )
             if not any(_overlaps(s, o) for o in out):
                 out.append(s)
@@ -150,12 +170,13 @@ def _clean(text: str, limit: int = 600) -> str:
 def render_body(s: Suggestion) -> str:
     fence = "`" * max(3, max((len(m) for m in re.findall(r"`+", s.replacement)), default=0) + 1)
     rep = s.replacement if s.replacement.endswith("\n") or s.replacement == "" else s.replacement + "\n"
-    badge = "🔧 auto-fix" if s.source == "tool" else f"🤖 local model · confidence {s.confidence}"
+    badge = "🔧 reviewed tool fix" if s.source == "tool" else "🤖 local model · patch gate verified"
     evidence = ", ".join(f"`{_clean(item, 160)}`" for item in s.evidence)
     reviewer = f"\n\n**Verifier role evidence:** {_clean(s.reviewer_summary)}" if s.reviewer_summary else ""
+    provenance = f"\n\n**Evidence digest:** `{s.grounding_sha256}`" if s.grounding_sha256 else ""
     return (
         f"**VibeCI · `{s.rule}`** · {badge}\n\n{_clean(s.title, 200)}\n\n{_clean(s.detail)}"
-        f"\n\n**Evidence:** {evidence}{reviewer}\n\n"
+        f"\n\n**Evidence:** {evidence}{reviewer}{provenance}\n\n"
         f"{fence}suggestion\n{rep}{fence}\n<!-- vibeci:fp={s.fingerprint} -->"
     )
 
