@@ -78,13 +78,24 @@ Every task attempt has its own branch and linked Git worktree. `/restore` checks
 3. the checked-out branch has the configured agent prefix; and
 4. the worktree root is exactly the recorded path.
 
-Only then does it run `git reset --hard <baseline>` **inside that worker worktree**. It never runs `git clean`; untracked user files remain. It never resets the controller worktree, rewrites a shared branch, pushes or merges. `/stop` records the ID and prevents a stopped task attempt from being verified; durable process cancellation is still future work because the current controller does not launch provider processes.
+Only then does it run `git reset --hard <baseline>` **inside that worker worktree**. It never runs `git clean`; untracked user files remain. It never resets the controller worktree, rewrites a shared branch, pushes or merges. `/stop` records the ID and blocks start, verify and restore for that ID; `/resume` is an explicit human-only reversal that marks a stopped task `failed` so restore is still required. Durable process cancellation is future work because the current controller does not launch provider processes.
+
+## Graph and bot plane
+
+`vibeci.graph` holds two validated graph shapes. The lifecycle graph declares the actor for each node (`human`, `deterministic`, bounded `model`, terminal) and explicit event edges, including bounded `gate_failed` retry edges. The plan graph is derived from approved task dependencies and must be a DAG; `ready_tasks()` returns only tasks whose dependencies are already verified. Graph validation rejects duplicate/unknown nodes, duplicate event edges and unreachable nodes. `/graph` renders both as Mermaid from state, and `/bot`/`/next` never mutate state.
+
+`vibeci.bot` is a deterministic rule table with an allowlist of events. It prioritizes open human questions, never infers a missing goal or plan, and returns `blocked` for unknown or ambiguous events. A decision contains one allowlisted command plus its evidence; the bot never executes it, approves a digest or merges. The only model-routed actions are the explicit planner role and optional verifier roles, each separately disclosed.
+
+## Grounded publication boundary
+
+`vibeci.grounding` builds an evidence ledger from the scanner finding, exact numbered source lines, the gate reason and a SHA-256 digest. `build_grounding()` emits statements that are re-resolved against that ledger; any mismatch or duplicate reference drops the whole report. `render_grounding()` feeds review suggestions with deterministic detail text, evidence references and a provenance digest. Model-authored `bug`, `edge_case.scenario`, verifier narrative and self-reported confidence are not published; gated local patches receive a deterministic `medium` label. This is an output guarantee: it prevents an unverified model claim from becoming a repository statement, but it does not claim that the model never reasons incorrectly internally.
 
 ## Trust boundaries
 
 - PR, issue, goal, source, comment, local-note, search-result and fetched-page content is untrusted input: model prompts wrap model-facing code/evidence in per-request random `VIBECI_UNTRUSTED_*` marker blocks so input cannot forge the end marker.
 - Models have no tools in the standard scan path and output only through strict Pydantic/JSON schemas.
-- Model output is untrusted: Pydantic validation, window check, line-prefix/fence check, evidence allowlist, patch gate, HTML/@-mention stripping and dynamic code-fence length.
+- Model output is untrusted: Pydantic validation, window check, line-prefix/fence check, evidence allowlist, patch gate, evidence-ledger grounding, HTML/@-mention stripping and dynamic code-fence length.
+- Published review detail contains no model-authored prose: every published statement resolves to a finding, exact source line, gate result or digest.
 - No-regression is per rule code: a patch removing F401 but adding S110 is rejected even when total count stays flat.
 - Model plans are proposals: stale goal IDs, hallucinated/hidden tracked paths, unsafe new paths, invalid dependency order and unsupported evidence references fail closed.
 - Supply chain: hash-locked Python dependencies, SHA-256 for the llama.cpp archive on every run, extracted binaries rebuilt from the verified archive, commit-pinned model URL + SHA-256, and full-SHA third-party action pins. Mismatch means failure.
@@ -97,7 +108,7 @@ Only then does it run `git reset --hard <baseline>` **inside that worker worktre
 
 ## Grammar vs. correctness
 
-A GBNF/JSON-schema grammar guarantees syntax only. It cannot stop a model from proposing a wrong but well-formed patch. Correctness evidence comes from the deterministic gate, reviewed verification commands, bounded role review and human review. Two calls to one local model are correlated and never described as two independent AIs.
+A GBNF/JSON-schema grammar guarantees syntax only. It cannot stop a model from proposing a wrong but well-formed patch, and it cannot stop a model from believing an unsupported claim. Correctness evidence comes from the deterministic gate, reviewed verification commands, bounded role review, the evidence-ledger publication boundary and human review. Two calls to one local model are correlated and never described as two independent AIs. "The model never hallucinates" is therefore not a claim this project makes; "an unverified model claim is never published as fact" is.
 
 ## Model profiles
 

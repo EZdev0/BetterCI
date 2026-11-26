@@ -36,6 +36,10 @@ LOCAL_ONLY_COMMAND_NAMES = (
     "notifications",
     "ack",
     "schedule",
+    "next",
+    "graph",
+    "bot",
+    "resume",
 )
 _LOCAL_ONLY_COMMAND_NAMES = frozenset(LOCAL_ONLY_COMMAND_NAMES)
 _BARE_COMMANDS = frozenset(

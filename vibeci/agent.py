@@ -20,6 +20,8 @@ from pydantic import ValidationError
 from . import agent_parser
 from .agent_types import CommandResult
 from .bigbrain import BigBrainCommands
+from .bot import bot_report, route
+from .graph import graph_report
 from .knowledge import KnowledgeJournal
 from .llm import LLMClient
 from .models import AgentState, PlanTask, ScheduleProposal, TaskRuntime
@@ -40,6 +42,7 @@ _HELP = """VibeCI agent commands:
 /review standard|advanced
 /restore <task-id>
 /stop <agent-id>
+/resume <agent-id>
 /ask <team> -- "<question>" [--ref <context>]
 /answer <question-id> -- "<answer>"
 /teams
@@ -49,8 +52,11 @@ _HELP = """VibeCI agent commands:
 /notifications [all|open]
 /ack <notification-id>
 /schedule "<five-field-cron>" -- /verify|/status
+/next
+/graph
+/bot <event>
 
-Planning is read-only. Writes require an approved plan and an isolated managed worktree. Open questions pause workers. /brief never launches a provider, and /approve never merges.
+Planning is read-only. Writes require an approved plan and an isolated managed worktree. Open questions pause workers. /brief never launches a provider, and /approve never merges. /next and /graph are deterministic; /bot only returns an allowlisted command and never executes it.
 
 Policy-authorized GitHub issue/PR comments use a separate diagnostics-only adapter after its workflow is on the default branch:
 /help | /ci | /runs | /run <run-id> | /runners | /failures
@@ -300,6 +306,8 @@ class AgentController(BigBrainCommands):
         task = next((item for item in state.plan.tasks if item.id == task_id), None)
         if task is None:
             raise ValueError(f"unknown task: {task_id}")
+        if task_id in state.stopped_agents:
+            raise ValueError(f"task {task_id} was stopped; it cannot be started, verified or restored")
         runtime = state.tasks[task_id]
         if require_dependencies:
             for dependency in task.dependencies:
@@ -448,6 +456,20 @@ class AgentController(BigBrainCommands):
             state.tasks[args[0]].status = "stopped"
         return CommandResult(True, True, f"Agent {args[0]} is stopped; later output from that ID must be ignored.")
 
+    def _cmd_resume(self, state: AgentState, args: list[str]) -> CommandResult:
+        if len(args) != 1 or not args[0].replace("-", "").isalnum():
+            raise ValueError("usage: /resume <agent-id>")
+        if args[0] not in state.stopped_agents:
+            raise ValueError(f"agent {args[0]} is not stopped")
+        state.stopped_agents.remove(args[0])
+        if args[0] in state.tasks and state.tasks[args[0]].status == "stopped":
+            state.tasks[args[0]].status = "failed"
+        return CommandResult(
+            True,
+            True,
+            f"Agent {args[0]} is no longer stopped. A task attempt is marked failed and must be restored before retry.",
+        )
+
     def _cmd_schedule(self, state: AgentState, args: list[str]) -> CommandResult:
         if "--" not in args:
             raise ValueError('usage: /schedule "<five-field-cron>" -- /verify|/status')
@@ -466,3 +488,35 @@ class AgentController(BigBrainCommands):
             "Schedule proposal recorded but disabled. A human-reviewed workflow PR is required; no cron job was created.",
             proposal.model_dump(),
         )
+
+    def _cmd_next(self, state: AgentState, args: list[str]) -> CommandResult:
+        if args:
+            raise ValueError("/next takes no arguments")
+        data = bot_report(
+            state,
+            planner_configured=self.planner is not None,
+            maximum_parallel=int(self.settings["agents"]["maximum_parallel_workers"]),
+        )
+        return CommandResult(True, False, json.dumps(data["actions"], indent=2), data)
+
+    def _cmd_graph(self, state: AgentState, args: list[str]) -> CommandResult:
+        if args:
+            raise ValueError("/graph takes no arguments")
+        data = graph_report(state)
+        return CommandResult(
+            True,
+            False,
+            f"Lifecycle graph:\n{data['lifecycle']}\n\nTask graph:\n{data['tasks']}",
+            data,
+        )
+
+    def _cmd_bot(self, state: AgentState, args: list[str]) -> CommandResult:
+        if not args or len(args) > 3:
+            raise ValueError("usage: /bot <event>")
+        detail = ""
+        if len(args) > 1:
+            if len(args) != 3 or args[1] != "--detail":
+                raise ValueError("usage: /bot <event>")
+            detail = args[2]
+        decision = route(args[0].casefold(), state, detail)
+        return CommandResult(not decision.blocked, False, decision.render(), decision.as_dict())

@@ -98,6 +98,9 @@ class Suggestion(BaseModel):
     confidence: Literal["high", "medium", "low"] = "high"
     evidence: list[str] = Field(default_factory=list, max_length=8)
     reviewer_summary: str | None = Field(default=None, max_length=600)
+    # Digest of the deterministic, evidence-checked statements shown to a human.
+    # Model-authored prose is never stored in a published suggestion.
+    grounding_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @property
     def fingerprint(self) -> str:

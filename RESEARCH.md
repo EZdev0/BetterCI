@@ -1,6 +1,6 @@
 # Research log
 
-**Last updated:** 2026-10-26 (Europe/Berlin)
+**Last updated:** 2026-11-26 (UTC)
 
 **Method:** official documentation and official GitHub repositories were searched/read through the web interface. No source repository below was cloned or executed during this update. Runtime claims remain unverified until a reproducible local/CI measurement is committed.
 
@@ -12,6 +12,15 @@ This is the canonical append-only research log for current architecture decision
 - **SOURCE CLAIM:** stated by a primary source but not reproduced here.
 - **UNVERIFIED:** hypothesis or candidate that needs a committed benchmark.
 - Every new time-sensitive claim must record an access date and URL here. Search snippets are discovery aids; implementation decisions should prefer the linked primary document/repository.
+
+## Access log — 2026-11-26
+
+| Source (accessed 2026-11-26) | Observed primary-source fact | Decision in BetterCI |
+|---|---|---|
+| [NIST AI 600-1, Generative AI Profile](https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.600-1.pdf) | NIST defines confabulation as confidently stated false or erroneous output and recommends reviewing/verifying sources and citations in outputs (`MS-2.5-003`), plus provenance techniques such as cryptographic hashes (`MG-4.1-008`). It treats confabulation as a risk to manage, not a defect removed by prompt wording. | Keep the claim narrow: no generative model is guaranteed never to be wrong. Publish only statements that resolve against an evidence ledger and record a SHA-256 digest of the published evidence set. Unsupported model prose is dropped, not paraphrased. |
+| [Qwen3.6-27B announcement](https://qwen.ai/blog?id=qwen3.6-27b) and [Qwen3.6-35B-A3B announcement](https://qwen.ai/blog?id=qwen3.6-35b-a3b) | **SOURCE CLAIM:** Qwen announced open-weight 27B dense and 35B-A3B sparse coding models in April 2026 with strong agentic-coding claims. No runner latency, RAM or GGUF artifact was measured here. | Record as future evaluation candidates only. No lock entry, default change or capability claim is made; `evaluate-model` remains the gate for a real identical-runner comparison. |
+| [Qwen3-Coder announcement](https://qwen.ai/blog?id=d927d7d2e59d059045ce758ded34f98c0186d2d7) and [Qwen3 announcement](https://qwen.ai/blog?id=qwen3) | **SOURCE CLAIM:** Qwen3-Coder targets agentic coding with long context; the Qwen3 dense family is published under Apache-2.0. The first Qwen3-Coder release is a 480B-A35B model, far beyond the current CI runner budget. | Do not switch the pinned 7B local worker to a model that has not been downloaded, hashed and measured for this runner. Agentic benchmark scores cannot replace the deterministic gate. |
+| [LangGraph documentation index](https://langchain-ai.github.io/langgraph/llms.txt) | **SOURCE CLAIM:** LangGraph documents stateful graphs, explicit nodes/edges, persistence, subgraphs and human-in-the-loop patterns; the docs moved to docs.langchain.com. | Adopt the *pattern* in the small local control plane: explicit actors, event edges, validated DAG and rule-based routing. No new runtime dependency is added to the CI fast path. |
 
 ## Access log — 2026-10-26
 
@@ -63,6 +72,7 @@ There is no “perfect” local CI model. A grammar proves output shape, not tru
 1. **Default / quality profile:** keep `qwen2.5-coder-7b` Q4_K_M. It already has a reviewed lock entry and its 7B upstream license is Apache-2.0. It receives only one scanner finding and a small window.
 2. **Fast candidate:** `qwen2.5-coder-3b-fast` Q4_K_M (1.93 GB) is available for opt-in smoke runs. It should download and infer faster, but that is **UNVERIFIED on GitHub’s runner** and its upstream licensing differs from the 7B model.
 3. **Selection gate:** run `python -m vibeci evaluate-model` on the same runner image for both models, cold and warm. Record download time, total case latency, schema-valid rate, semantic pass rate and peak RSS. Do not change the default on file size or vendor benchmark alone.
+4. **2026 candidate queue (unmeasured):** Qwen3.6-27B dense and Qwen3.6-35B-A3B sparse are open-weight agentic-coding candidates from the 2026-11-26 access log. They need a pinned GGUF revision/hash, license review and the same cold/warm runner comparison before they may replace either locked profile. No default changed in this update.
 4. **Correctness authority:** scanner evidence + syntax/compiler/linter/test checks + deletion/path/language/security policy + human review. The model never becomes the authority.
 
 No real-model score is recorded in this commit because neither multi-gigabyte candidate was downloaded in this workspace. Mock-server integration tests exercise protocol behavior, not model quality.

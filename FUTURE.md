@@ -1,6 +1,6 @@
 # Future development
 
-**Updated:** 2026-10-26
+**Updated:** 2026-11-26
 
 This file separates shipped behavior from planned work. A checkbox is completed only when code, tests and documentation exist; names alone are not implementations.
 
@@ -25,6 +25,10 @@ This file separates shipped behavior from planned work. A checkbox is completed 
 - [x] Disabled-by-default tokenless SearXNG JSON search and allowlisted direct text fetch with strict URL/time/byte/result/no-redirect controls.
 - [x] Least-privilege, read-only GitHub issue/PR diagnostics for help, exact target CI, runs, assigned runners and failed steps. The adapter executes an exact default-branch event SHA, combines dual repository-role checks with a secret-backed login/user-ID/control-issue allowlist, supports only default/same-repository-PR targets and never checks out contributor code.
 - [x] Resource-specific comment-response jobs: normal Issues receive only `issues: write`, PR conversations receive only `pull-requests: write`, and GitHub help distinguishes diagnostics from the complete local-only lifecycle. Known local-only comment commands fail with an actionable availability response instead of silence.
+- [x] Deterministic lifecycle and task graphs (`vibeci.graph`): declared node actors, validated event edges, bounded retry edges, acyclic plan DAG, Mermaid rendering and dependency-ready scheduling. No model selects an edge.
+- [x] Rule-based bot (`vibeci.bot`) with an explicit event allowlist, open-question priority, deterministic `/next` guidance and non-executing `/bot` decisions. Default routing uses no model.
+- [x] Evidence-grounded publication (`vibeci.grounding`): every published review statement resolves to a scanner finding, exact source line, gate result or SHA-256 digest; model-authored prose is never published as fact.
+- [x] `/stop` now blocks start, verify and restore for that task ID; `/resume` is an explicit human-only reversal that still requires restore before retry.
 
 ## Next — required before stateful or autonomous execution from GitHub comments
 
@@ -36,7 +40,7 @@ This is the second stage of `COMMAND-SURFACE-RECOVERY-v1`. The permission/help r
 - [ ] Convert an approved plan into linked Linear/GitHub tasks idempotently.
 - [ ] Add durable worker execution. GitHub-hosted runners are ephemeral; worktrees cannot survive between separate jobs without a deliberate artifact/ref protocol.
 - [ ] Add judge-controlled candidate integration by cherry-picking verified task commits into a new integration branch. Never auto-merge the PR.
-- [ ] Add tamper-evident JSONL audit events for prompts, model/role identity, tool decisions, checks, commits and verdicts.
+- [ ] Add tamper-evident JSONL audit events for prompts, model/role identity, tool decisions, checks, commits and verdicts. The published-evidence digest is a first building block, not a complete audit log.
 
 ## Provider adapters (opt-in, no fake compatibility)
 

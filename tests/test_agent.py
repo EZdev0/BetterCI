@@ -243,9 +243,12 @@ def test_marker_identity_and_stopped_attempt_fail_closed(tmp_path):
 
     assert controller.handle("/stop update-value").ok
     stopped = controller.handle("/verify update-value")
-    assert not stopped.ok and "not an active attempt" in stopped.message
+    assert not stopped.ok and "was stopped" in stopped.message
     retry = controller.handle("/start update-value")
-    assert not retry.ok and "restore" in retry.message
+    assert not retry.ok and "was stopped" in retry.message
+    blocked_restore = controller.handle("/restore update-value")
+    assert not blocked_restore.ok and "was stopped" in blocked_restore.message
+    assert controller.handle("/resume update-value").ok
 
     marker_path = worktree / ".vibeci-worktree.json"
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
