@@ -8,6 +8,7 @@
 
 All documentation in this repository is in English.
 
+* [**Repo-to-Go guide**](docs/REPO_TO_GO.md) – the everyday workflow: analysing a pull request, getting gated fixes, changing the repository through the agent lifecycle, and asking CI from a comment.
 * [Agent policy](AGENTS.md) and [`.agents/`](.agents/) – mandatory goal/plan/approval lifecycle, roles, commands and settings.
 * [Architecture](docs/ARCHITECTURE.md) – pipelines, trust boundaries, worktrees and restoration.
 * [Error register](docs/ERRORS.md) – tracked defects, causes, solution paths and regression tests.
@@ -42,7 +43,11 @@ jobs:
         with: { fetch-depth: 0, persist-credentials: false }
       - uses: EZdev0/BetterCI@e72808021f3586921b44c6b90102c0ea0a966007 # merged CI-hardened baseline
 ```
-The example above is a **real commit SHA** on `main` (not a placeholder). Pin the action to the full commit you actually reviewed and replace it when you tag a release. Mutable tags are exactly what broke Trivy's action in March 2026.
+The example above is a **real commit SHA** on `main` (not a placeholder); it is the
+`2026-10-24` CI-hardening baseline, so it predates the graph/bot/grounding and comment-
+diagnostics work merged since. Check `main` for the commit you actually reviewed, pin
+that full SHA, and replace it when you tag a release. Mutable tags are exactly what
+broke Trivy's action in March 2026.
 
 Fork PRs: GitHub gives `pull_request` runs a read-only token, so suggestions appear as annotations and in the job summary. Posting for forks needs a separate `workflow_run` job (see `docs/ARCHITECTURE.md`).
 
@@ -182,6 +187,12 @@ Targets are **measured, not claimed**. There is no benchmark workflow in this re
 /usr/bin/time -f 'deterministic scan: %e s' python -m vibeci scan --no-llm --profile fast --out /tmp/vibeci-bench
 ```
 
+That command reviews the default base (`origin/$GITHUB_BASE_REF` in Actions, otherwise
+`HEAD~1`). Pass `--base <ref>` explicitly to time a defined scope. In a shallow clone
+the base does not exist, VibeCI falls back to a whole-tree diff and says so; the log
+line and `review.json`'s `diff_scope` then report the **effective** base, never the
+requested one. See [Repo-to-Go §3.2](docs/REPO_TO_GO.md#32-the-shallow-clone-trap-read-this-before-you-trust-a-local-number).
+
 For the model stage, install the pinned binaries with `scripts/install-llama.sh` + `scripts/fetch-model.sh`, start `scripts/start-server.sh`, and run `python -m vibeci doctor` before timing a scan with `--llm-url http://127.0.0.1:8080`. Compare the pinned candidates with the same runner image:
 
 ```bash
@@ -192,12 +203,38 @@ python -m vibeci evaluate-model --llm-url http://127.0.0.1:8080 \
 The smoke harness records schema/gate/semantic pass results and latency; it explicitly is not a repository-scale correctness benchmark. The 3B Q4_K_M file is 1.93 GB and should be faster to download/infer than 7B, but this has **not** been measured in this repository. The 7B model remains default until cold/warm comparisons are committed. The deterministic stage is what keeps the ordinary path short. Results table: *pending first measured live-model run*.
 
 ## Comparison (capabilities, not speed)
-| | VibeCI | hosted SAST/AI reviewers |
-|---|---|---|
-| Default scan needs API key / external service | no | usually yes |
-| Code leaves the runner | no for scan/model; opt-in research sends its query/URL to configured hosts | usually yes |
-| Native `suggestion` blocks | yes | varies |
-| Model output validated by compiler/linter | yes | varies |
+
+Checked against the tools below on 2026-11-27; sources are dated in [`RESEARCH.md`](RESEARCH.md).
+
+| | VibeCI | PR-Agent (MIT, self-hosted) | reviewdog (MIT) | CodeRabbit / Qodo (hosted) |
+|---|---|---|---|---|
+| Default scan needs an API key or external service | no | yes, a model endpoint (LiteLLM, incl. Ollama) | no, it posts existing linter output | yes, the vendor service |
+| Code leaves your infrastructure | no for scan/model; opt-in research sends only its query/URL to hosts you allowlist | only if your model endpoint is remote | no | yes |
+| Native `suggestion` blocks | yes | code suggestions | yes (its core purpose) | yes |
+| Model patch re-validated by compiler/linter, per rule code | yes | not its stated design | n/a, no model | varies |
+| Published review text free of model prose | yes (evidence ledger + SHA-256 digest) | no | n/a | no |
+| Runs offline / air-gapped | yes for the deterministic stage | yes with a local model | yes | no |
+
+Where the hosted reviewers are genuinely ahead, and this project does not claim
+otherwise:
+
+* **Breadth.** CodeRabbit orchestrates 50+ third-party linters and SAST scanners from
+  one config; VibeCI ships five scanners.
+* **Cross-repository context.** Qodo's Context Engine and CodeRabbit's linked
+  repositories read other repos; VibeCI reads only the checkout it runs in.
+* **Autonomous fixing.** Copilot's coding agent and Qodo's remediation agent can push
+  fixes and open follow-up PRs. VibeCI deliberately stops at a gated suggestion.
+* **Measured review quality.** Independent trackers publish F1 numbers for hosted
+  reviewers (for example CodeRabbit 61.8%, Copilot 61.0%, Qodo 57.8% on one
+  third-party benchmark). VibeCI has **no** comparable number: its model quality is
+  unmeasured and no benchmark corpus is committed yet. Do not read the rows above as
+  a quality claim.
+
+VibeCI's position is narrow by design: the deterministic stage needs no key and no
+network, the model can only patch inside a gate that re-runs the tools that found the
+problem, and nothing unverified is published as a repository fact. If you want a
+breadth-first hosted reviewer, use one; this is the scanner-first, local-model,
+evidence-first alternative.
 
 ## Develop
 ```bash

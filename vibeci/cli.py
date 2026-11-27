@@ -38,9 +38,16 @@ def _in_diff(f: Finding, dm: dict[str, set[int]]) -> bool:
 def cmd_scan(a: argparse.Namespace) -> int:
     t0 = time.monotonic()
     base = a.base or (f"origin/{os.environ['GITHUB_BASE_REF']}" if os.environ.get("GITHUB_BASE_REF") else "HEAD~1")
-    dm = diffmap.parse_diff(diffmap.git_diff(base, a.head))
+    resolved = diffmap.resolve_diff(base, a.head)
+    dm = diffmap.parse_diff(resolved.text)
     files = [p for p in diffmap.changed_files(dm) if os.path.isfile(p)]
-    log(f"{len(files)} changed file(s) vs {base}")
+    if resolved.full_tree_fallback:
+        log(
+            f"{len(files)} changed file(s): whole tree in scope because {resolved.requested_base!r} "
+            f"does not exist (shallow clone or root commit); pass --base <ref> to narrow the review"
+        )
+    else:
+        log(f"{len(files)} changed file(s) vs {resolved.effective_base}")
     findings = [f for f in tools.collect(files, a.profile) if _in_diff(f, dm)]
     log(f"{len(findings)} finding(s) in changed lines ({time.monotonic() - t0:.1f}s)")
 
@@ -66,6 +73,14 @@ def cmd_scan(a: argparse.Namespace) -> int:
                 if a.review_mode == "advanced" else "standard deterministic gate"
             ),
             "suggestions": [s.model_dump() for s in sugs],
+            # Provenance of the review scope. Without this an artifact reader
+            # cannot tell whether findings cover one commit or the whole tree.
+            "diff_scope": {
+                "requested_base": resolved.requested_base,
+                "effective_base": resolved.effective_base,
+                "head": a.head,
+                "full_tree_fallback": resolved.full_tree_fallback,
+            },
         }, fh, indent=2)
     with open(os.path.join(a.out, "findings.json"), "w", encoding="utf-8") as fh:
         json.dump([f.model_dump(mode="json") for f in findings], fh, indent=2)
@@ -73,8 +88,13 @@ def cmd_scan(a: argparse.Namespace) -> int:
     for f in rest[:50]:
         lvl = "error" if f.severity.value == "error" else "warning" if f.severity.value == "warning" else "notice"
         print(f"::{lvl} file={_esc(f.path, True)},line={f.line},endLine={f.end_line},title={_esc('VibeCI ' + f.rule, True)}::{_esc(f.message)}")
+    scope = (
+        f"whole tree (`{resolved.requested_base}` missing)" if resolved.full_tree_fallback
+        else f"`{resolved.effective_base}...{a.head}`"
+    )
     summary = (f"### VibeCI\n- findings in changed lines: **{len(findings)}**\n- one-click suggestions: **{len(sugs)}** "
                f"({sum(s.source == 'tool' for s in sugs)} deterministic, {sum(s.source == 'llm' for s in sugs)} local model)\n"
+               f"- diff scope: {scope}\n"
                f"- review mode: **{a.review_mode}**"
                f"{' (2 verifier role passes on the same local model)' if a.review_mode == 'advanced' else ''}\n"
                f"- runtime: {time.monotonic() - t0:.1f}s\n")
