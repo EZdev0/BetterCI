@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from typing import NamedTuple
 
 from .tools import log
 
@@ -58,28 +59,58 @@ def _ref_exists(ref: str) -> bool:
     return proc.returncode == 0
 
 
-def git_diff(base: str, head: str = "HEAD", context: int = 3) -> str:
-    """Diff of the PR (merge-base semantics, three dots).
+class ResolvedDiff(NamedTuple):
+    """Diff text plus the comparison base that was *actually* used.
+
+    Callers must report `effective_base`, never the requested `base`: when the
+    requested ref is missing the fallback compares the whole tree, and claiming
+    the requested ref would misstate the evidence behind every finding (E-21).
+    """
+
+    text: str
+    requested_base: str
+    effective_base: str
+    full_tree_fallback: bool
+
+
+def resolve_diff(base: str, head: str = "HEAD", context: int = 3) -> ResolvedDiff:
+    """Diff of the PR (merge-base semantics, three dots) with provenance.
 
     If `base` cannot be resolved (root commit behind `HEAD~1`, shallow clone
     without `origin/<base>`, deleted base branch), fall back to a two-dot diff
-    against the empty tree instead of crashing the whole action.
+    against the empty tree instead of crashing the whole action. The fallback is
+    reported back to the caller so the scan summary and `review.json` can state
+    the real comparison base instead of the requested one.
     """
     for ref in (base, head):
         if not _SAFE_REF.fullmatch(ref):
             raise ValueError(f"unsafe git ref: {ref!r}")
     common = ["git", "diff", f"-U{int(context)}", "--no-color", "--no-ext-diff"]
-    if _ref_exists(base):
-        args = [*common, f"{base}...{head}", "--"]
-    else:
-        log(f"base ref {base!r} not available; diffing {head} against the empty tree")
+    fallback = not _ref_exists(base)
+    if fallback:
+        log(
+            f"base ref {base!r} not available; diffing {head} against the empty tree "
+            "(every line of every tracked file counts as changed)"
+        )
         subprocess.run(["git", "hash-object", "-t", "tree", "-w", "/dev/null"],
                        capture_output=True, text=True, check=False)
         args = [*common, _EMPTY_TREE, head, "--"]
+    else:
+        args = [*common, f"{base}...{head}", "--"]
     proc = subprocess.run(args, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
         raise RuntimeError(f"git diff failed: {proc.stderr.strip()[:300]}")
-    return proc.stdout
+    return ResolvedDiff(
+        text=proc.stdout,
+        requested_base=base,
+        effective_base=_EMPTY_TREE if fallback else base,
+        full_tree_fallback=fallback,
+    )
+
+
+def git_diff(base: str, head: str = "HEAD", context: int = 3) -> str:
+    """Diff text only. Prefer :func:`resolve_diff` so the base is not misreported."""
+    return resolve_diff(base, head, context).text
 
 
 def contiguous(lines: set[int], start: int, end: int) -> bool:

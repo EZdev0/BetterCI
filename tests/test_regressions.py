@@ -50,6 +50,53 @@ def test_scan_survives_root_commit_without_parent(tmp_path, monkeypatch):
         assert isinstance(json.load(fh)["suggestions"], list)
 
 
+def test_resolve_diff_reports_the_base_it_actually_used(tmp_path, monkeypatch):
+    """E-21: a missing base falls back to the empty tree; say so, do not claim HEAD~1."""
+    _init_root_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    resolved = diffmap.resolve_diff("HEAD~1", "HEAD")
+
+    assert resolved.requested_base == "HEAD~1"
+    assert resolved.full_tree_fallback is True
+    assert resolved.effective_base == diffmap._EMPTY_TREE
+    assert diffmap.parse_diff(resolved.text) == {"app.py": {1}}
+    # The whole-tree comparison is not silent and the narrow text API still works.
+    assert diffmap.git_diff("HEAD~1", "HEAD") == resolved.text
+
+
+def test_scan_artifact_records_whole_tree_scope_when_base_is_missing(tmp_path, monkeypatch):
+    """E-21: review.json must not let a reader believe only one commit was reviewed."""
+    _init_root_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+    assert cli.main(["scan", "--no-llm", "--out", "out"]) == 0
+
+    with (tmp_path / "out/review.json").open(encoding="utf-8") as fh:
+        scope = json.load(fh)["diff_scope"]
+    assert scope["requested_base"] == "HEAD~1"
+    assert scope["effective_base"] == diffmap._EMPTY_TREE
+    assert scope["full_tree_fallback"] is True
+
+
+def test_scan_artifact_records_the_narrow_base_when_it_exists(tmp_path, monkeypatch):
+    _init_root_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "app.py").write_text("x = 2\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-aqm", "second"], cwd=tmp_path, check=True, capture_output=True)
+    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+    assert cli.main(["scan", "--no-llm", "--out", "out"]) == 0
+
+    with (tmp_path / "out/review.json").open(encoding="utf-8") as fh:
+        scope = json.load(fh)["diff_scope"]
+    assert scope["full_tree_fallback"] is False
+    assert scope["effective_base"] == "HEAD~1"
+
+
 def test_added_line_that_looks_like_a_file_header_is_not_a_header():
     # An added source line "++ foo" is rendered as "+++ foo" by git and must not
     # be mistaken for a "+++ b/path" file header in the middle of a hunk.

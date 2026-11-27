@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [Unreleased] — 2026-11-27
+
+### Added
+
+- `docs/REPO_TO_GO.md`: an English end-to-end guide for working inside a repository with VibeCI — choosing review scope, the shallow-clone trap, reading scan output, gated fixes, the full goal/plan/approve/start/verify/restore lifecycle, comment-based CI analysis, an explicit list of what is deliberately not possible, and a troubleshooting table. Every command in it was executed against this repository.
+- `review.json` now carries a `diff_scope` block (`requested_base`, `effective_base`, `head`, `full_tree_fallback`), and the scan summary prints the comparison scope that was really used.
+- `diffmap.resolve_diff()` returns diff text together with its provenance; `diffmap.git_diff()` remains available as a thin wrapper, so no caller or test had to be removed.
+- `RESEARCH.md` access log for 2026-11-27 covering `issue_comment`/fork-token behaviour, `pull_request_target` execution protections, read-only cache tokens, `actions/checkout` `allow-unsafe-pr-checkout`, llama-server structured-output routes, and a sourced competitor comparison. Secondary sources are labelled as such.
+
+### Fixed
+
+- **E-21:** a scan whose requested base ref did not exist (shallow clone, root commit) silently reviewed the whole tree while logging and reporting the *requested* base — for example `80 changed file(s) vs HEAD~1` when nothing was compared against `HEAD~1`, and `review.json` recorded no base at all. The scan now reports the effective base, warns that the whole tree is in scope, and records the provenance. Three regression tests cover the fallback and the narrow case.
+
+### Changed
+
+- The README comparison now names PR-Agent, reviewdog, CodeRabbit and Qodo instead of a generic "hosted SAST/AI reviewers" column, states where hosted reviewers are genuinely ahead (linter breadth, cross-repository context, autonomous fixing, published F1 numbers), and drops the over-broad claim that hosted reviewers usually require an API key — PR-Agent is MIT and runs against a local model. No competitor F1 figure is adopted as a BetterCI quality claim.
+- The README install example now discloses that its pinned SHA is the 2026-10-24 CI-hardening baseline and predates work merged since.
+
 ## [Unreleased] — 2026-11-26
 
 ### Added
